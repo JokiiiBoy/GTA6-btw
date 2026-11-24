@@ -136,7 +136,8 @@ build_runtime() {
   info "Configuring Windows cross-build..."
   cmake -S "$REPO/runtime" -B "$WIN_BUILD" -G Ninja \
     --toolchain "$REPO/runtime/cmake/clang-cl-xwin.cmake" \
-    -DXWIN_DIR="$XWIN_DIR"
+    -DXWIN_DIR="$XWIN_DIR" \
+    -DLEONIDA_SDL3_FETCH=ON
   info "Building Windows runtime..."
   cmake --build "$WIN_BUILD" --parallel
   [[ -f "$WIN_BUILD/gta6rt.exe" ]] || die "build finished but gta6rt.exe not found in $WIN_BUILD"

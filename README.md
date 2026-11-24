@@ -9,8 +9,10 @@ GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida]
 - **Wine runtime path working:** cross-build `gta6rt.exe` with clang-cl/lld-link + xwin and run with `LEONIDA_SKIP_INT3=1 ./setup_leonida_wine.sh run`.
 - **Startup tracing:** JSONL traces + summaries via `tools/boot_trace.py`.
 - **XMem fix:** fixed Wine/MSVC static-init issue in `placeholder_api()` so large Xbox `XMemVirtualAlloc` reservations succeed.
-- **TLS fix:** general EXE TLS slot-0 redirect for modules with non-zero TLS index. This fixed hardcoded `gs:[0x58]` slot-0 accesses and moved boot significantly further (53246 loads redirected in `game_scarlett_master.exe`).
-- **Current blocker:** crash at `game_scarlett_master.exe+0x5925903` (read null, `rax=0x80004001`, `rcx=0`). `xgameruntime.dll!XErrorReport` is now exported; the remaining failure looks like an unimplemented/failed runtime API returning `E_NOTIMPL` and the game dereferencing a null result.
+- **TLS fix:** general EXE TLS slot-0 redirect for modules with non-zero TLS index. This fixed hardcoded `gs:[0x58]` slot-0 accesses and moved boot significantly further.
+- **GameInput fix:** added `GameInput.dll` ordinal `#1` alias for `GameInputCreate`; built with `LEONIDA_SDL3_FETCH=ON`.
+- **DirectStorage stub:** added minimal `xcrdapi.dll!DStorageGetFactory` stub to get past unimplemented DirectStorage factory.
+- **Current blocker:** crash in `host:ucrtbase.dll+0x5fe3a` (write `0x0`) called from `game_scarlett_master.exe+0x5b29847`, deeper in init. Needs stack/register tracing to identify which null pointer the game passed into CRT.
 
 ## Quick start
 
