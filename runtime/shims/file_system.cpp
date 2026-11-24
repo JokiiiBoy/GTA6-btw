@@ -47,6 +47,10 @@ namespace {
 
 constexpr wchar_t kGamePrefix[] = L"game:";
 constexpr size_t kGamePrefixLength = 5;
+constexpr wchar_t kCommonPrefix[] = L"common:";
+constexpr size_t kCommonPrefixLength = 7;
+constexpr wchar_t kPlatformPrefix[] = L"platform:";
+constexpr size_t kPlatformPrefixLength = 9;
 constexpr wchar_t kDeletedDir[] = L".gta6rt-deleted";
 constexpr wchar_t kScratchDir[] = L".gta6rt-temp";  // what "T:\" names, inside the overlay
 // A removed package folder is marked by this file inside its marker folder: the marker folder itself can already
@@ -124,11 +128,21 @@ bool lies_under(const std::wstring& path, const std::filesystem::path& root) {
 // a host drive of the same letter must keep working: a path under --game-dir or the overlay (a package on drive G:,
 // or a path GetModuleFileName handed back) stays a host path, and so does every G:/T: path while no roots are
 // configured. The scratch folder lives in the overlay, as `.gta6rt-temp`.
+// RAGE titles also use "common:" and "platform:" device names; map them to the game package root.
 enum class Drive { None, Game, Scratch };
 
 Drive console_drive(const std::wstring& path, size_t& prefix_length) {
-    if (path.size() >= kGamePrefixLength && lower(path.substr(0, kGamePrefixLength)) == kGamePrefix) {
+    const std::wstring lp = lower(path);
+    if (lp.size() >= kGamePrefixLength && lp.compare(0, kGamePrefixLength, kGamePrefix) == 0) {
         prefix_length = kGamePrefixLength;
+        return Drive::Game;
+    }
+    if (lp.size() >= kCommonPrefixLength && lp.compare(0, kCommonPrefixLength, kCommonPrefix) == 0) {
+        prefix_length = kCommonPrefixLength;
+        return Drive::Game;
+    }
+    if (lp.size() >= kPlatformPrefixLength && lp.compare(0, kPlatformPrefixLength, kPlatformPrefix) == 0) {
+        prefix_length = kPlatformPrefixLength;
         return Drive::Game;
     }
     if (path.size() < 2 || path[1] != L':' || (path.size() > 2 && !is_separator(path[2]))) return Drive::None;
@@ -647,11 +661,20 @@ void note_open_failure(const char* api, LPCWSTR name, DWORD error, const void* c
         utf8.resize(static_cast<size_t>(n) - 1);
         WideCharToMultiByte(CP_UTF8, 0, name, -1, utf8.data(), n, nullptr, nullptr);
     }
+    void* frames[12] = {};
+    const USHORT nframes = ::CaptureStackBackTrace(0, 12, frames, nullptr);
+    std::string stack = "[";
+    for (USHORT i = 0; i < nframes; ++i) {
+        if (i) stack += ",";
+        stack += rt::startup_trace::quote(rt::startup_trace::where(reinterpret_cast<uint64_t>(frames[i])));
+    }
+    stack += "]";
     rt::startup_trace::event(
         "file_open_failed",
         std::string("\"api\":\"") + api + "\",\"path\":" + rt::startup_trace::quote(utf8) +
             ",\"error\":" + std::to_string(error) + ",\"caller\":" +
-            rt::startup_trace::quote(rt::startup_trace::where(reinterpret_cast<uint64_t>(caller))));
+            rt::startup_trace::quote(rt::startup_trace::where(reinterpret_cast<uint64_t>(caller))) +
+            ",\"stack\":" + stack);
 }
 
 HANDLE WINAPI create_file_w(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES attributes,

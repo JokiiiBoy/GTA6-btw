@@ -12,7 +12,8 @@ GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida]
 - **TLS fix:** general EXE TLS slot-0 redirect for modules with non-zero TLS index. This fixed hardcoded `gs:[0x58]` slot-0 accesses and moved boot significantly further.
 - **GameInput fix:** added `GameInput.dll` ordinal `#1` alias for `GameInputCreate`; built with `LEONIDA_SDL3_FETCH=ON`.
 - **DirectStorage stub:** added minimal `xcrdapi.dll!DStorageGetFactory` stub to get past unimplemented DirectStorage factory.
-- **Current blocker:** crash in `host:ucrtbase.dll+0x5fe3a` (write `0x0`) called from `game_scarlett_master.exe+0x5b29847`, deeper in init. Needs stack/register tracing to identify which null pointer the game passed into CRT.
+- **RAGE device mapping:** mapped `common:` and `platform:` device names to the game package root in the file system shim.
+- **Current blocker:** crash in `host:ucrtbase.dll+0x5fe3a` (write `0x0`) called from `game_scarlett_master.exe+0x5b29847` after config validation fails (`int3` at `+0x1d5cc69` skipped by `LEONIDA_SKIP_INT3`). The game tries to load `common:\data\version.txt` and `platform:\data\gameconfig.zmt` (now mapped, but files not present as loose files in this package dump), leaving config uninitialized.
 
 ## Quick start
 
