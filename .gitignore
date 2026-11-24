@@ -40,6 +40,5 @@ __pycache__/
 
 # Local Leonida/GTA6-btw artifacts
 runtime/build/
-/home/joki/leonida-wine-logs/
 leonida-wine-logs/
 *.log

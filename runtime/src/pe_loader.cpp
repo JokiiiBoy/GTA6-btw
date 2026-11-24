@@ -1390,6 +1390,109 @@ Module& Loader::map_image(const std::filesystem::path& path, const std::string& 
 // gta6rt_tls_host.dll and maps a fresh clone of the helper for every additional simultaneous TLS module, each clone
 // getting its own index. All kMaxMappedTlsModules slots can be live at once; a further module is rejected rather than
 // silently sharing (and corrupting) a slot.
+// Rewrite hardcoded `mov r64, gs:[0x58]` (TEB TLS array, slot 0) to use the module's
+// assigned TLS index. Xbox/Windows EXEs expect index 0; Leonida may assign a different index.
+// Idea inspired by VIctory's tls redirect (GPL-3 compatible); implemented independently.
+static size_t redirect_tls_slot0(Module& m) {
+    if (m.tls_index == 0 || m.tls_index == kNoTlsIndex) return 0;
+    const uint32_t index = m.tls_index;
+    // Build 16 thunks: mov r,gs:[0x58]; lea r,[r + index*8]; ret
+    constexpr size_t kThunkSize = 32;
+    uint8_t thunks[16 * kThunkSize]{};
+    for (int reg = 0; reg < 16; ++reg) {
+        uint8_t* t = thunks + reg * kThunkSize;
+        size_t n = 0;
+        const uint8_t r = static_cast<uint8_t>(reg >> 3);
+        const uint8_t low = static_cast<uint8_t>(reg & 7);
+        // mov r64, gs:[0x58]
+        t[n++] = 0x65; t[n++] = static_cast<uint8_t>(0x48 | (r << 2));
+        t[n++] = 0x8B; t[n++] = static_cast<uint8_t>((low << 3) | 0x04);
+        t[n++] = 0x25; t[n++] = 0x58; t[n++] = 0x00; t[n++] = 0x00; t[n++] = 0x00;
+        // lea r64, [r64 + index*8]
+        t[n++] = static_cast<uint8_t>(0x48 | (r << 2) | r);
+        t[n++] = 0x8D;
+        t[n++] = static_cast<uint8_t>(0x80 | (low << 3) | low);
+        if (low == 4) t[n++] = 0x24; // SIB for rsp/r12
+        const uint32_t disp = index * 8;
+        std::memcpy(t + n, &disp, 4); n += 4;
+        t[n++] = 0xC3;
+    }
+
+    // Find executable section range to patch and a nearby cave for thunks.
+    auto* base = reinterpret_cast<uint8_t*>(m.base);
+    auto* nt = at<IMAGE_NT_HEADERS64>(base, reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    auto* sec = IMAGE_FIRST_SECTION(nt);
+    // Allocate thunk page near module
+    uint8_t* thunk_page = nullptr;
+    const uintptr_t target = reinterpret_cast<uintptr_t>(base);
+    uintptr_t lo = target > 0x70000000u ? target - 0x70000000u : 0x10000u;
+    if (lo < 0x110000000ULL) lo = 0x110000000ULL;
+    const uintptr_t hi = target + 0x70000000u;
+    for (uintptr_t addr = lo; addr < hi && !thunk_page; ) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi))) break;
+        const uintptr_t b = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        const uintptr_t end = b + mbi.RegionSize;
+        if (mbi.State == MEM_FREE && mbi.RegionSize >= 4096) {
+            uintptr_t ta = (b + 0xFFF) & ~uintptr_t(0xFFF);
+            if (ta + 4096 <= end) {
+                void* alloc = VirtualAlloc(reinterpret_cast<void*>(ta), 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (alloc) thunk_page = reinterpret_cast<uint8_t*>(alloc);
+            }
+        }
+        addr = end ? end : addr + 0x10000;
+    }
+    if (!thunk_page) {
+        // fallback: cave in module
+        for (size_t i = 0x1000; i + sizeof(thunks) < m.size; ++i) {
+            bool ok = true;
+            for (size_t j = 0; j < sizeof(thunks); ++j) { if (base[i+j] != 0xCC) { ok = false; i += j; break; } }
+            if (ok) { thunk_page = base + i; break; }
+        }
+    }
+    if (!thunk_page) return 0;
+    DWORD oldp = 0;
+    VirtualProtect(thunk_page, 4096, PAGE_READWRITE, &oldp);
+    std::memcpy(thunk_page, thunks, sizeof(thunks));
+    VirtualProtect(thunk_page, 4096, PAGE_EXECUTE_READ, &oldp);
+    FlushInstructionCache(GetCurrentProcess(), thunk_page, 4096);
+
+    size_t patched = 0;
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        const auto& s = sec[i];
+        if ((s.Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0) continue;
+        size_t start = s.VirtualAddress;
+        size_t len = std::min<size_t>(s.Misc.VirtualSize ? s.Misc.VirtualSize : s.SizeOfRawData, m.size - start);
+        DWORD sp_old = 0;
+        VirtualProtect(base + start, len, PAGE_EXECUTE_READWRITE, &sp_old);
+        for (size_t j = start; j + 9 <= start + len; ++j) {
+            uint8_t* c = base + j;
+            if (c[0] != 0x65) continue;
+            const uint8_t rex = c[1];
+            if (rex != 0x48 && rex != 0x4C) continue;
+            if (c[2] != 0x8B) continue;
+            if ((c[3] & 0xC7) != 0x04) continue;
+            if (c[4] != 0x25 || c[5] != 0x58 || c[6] != 0x00 || c[7] != 0x00 || c[8] != 0x00) continue;
+            const int reg = ((c[3] >> 3) & 7) | ((rex & 4) ? 8 : 0);
+            if (reg == 4) continue; // rsp
+            const uintptr_t site = reinterpret_cast<uintptr_t>(c);
+            const uintptr_t thunk_addr = reinterpret_cast<uintptr_t>(thunk_page) + static_cast<size_t>(reg) * kThunkSize;
+            const int64_t rel = static_cast<int64_t>(thunk_addr) - static_cast<int64_t>(site + 5);
+            if (rel < INT32_MIN || rel > INT32_MAX) continue;
+            const int32_t rel32 = static_cast<int32_t>(rel);
+            c[0] = 0xE8;
+            std::memcpy(c + 1, &rel32, 4);
+            c[5] = 0x0F; c[6] = 0x1F; c[7] = 0x40; c[8] = 0x00; // nop
+            ++patched;
+            j += 8;
+        }
+        VirtualProtect(base + start, len, sp_old, &sp_old);
+        FlushInstructionCache(GetCurrentProcess(), base + start, len);
+    }
+    std::fprintf(stderr, "[rt] tls: redirected %zu gs:[0x58] loads in %s (index %u)\n", patched, m.name.c_str(), index);
+    return patched;
+}
+
 static void patch_gta6_slot0_allocator(Module& m) {
     // GTA6 v1.0.2.1 hardcodes TEB TLS slot 0 for its allocator heap pointer at +0x13a8.
     // Leonida assigns the EXE a non-zero TLS index, so slot 0 is host CRT. Patch the allocator
@@ -1503,7 +1606,6 @@ static void patch_gta6_slot0_allocator(Module& m) {
 }
 
 void Loader::initialize_tls(Module& m) {
-    patch_gta6_slot0_allocator(m);
     auto* tls = tls_directory(m);
     if (!tls) return;
     // A present but all-zero directory is treated like an absent one.
@@ -1570,7 +1672,13 @@ void Loader::initialize_tls(Module& m) {
                 ",\"total\":" + std::to_string(total));
         // The index lives in a writable section and protect_sections() has not run yet, so the write needs no
         // VirtualProtect dance.
-        if (index_rva) *reinterpret_cast<uint32_t*>(m.base + index_rva) = index;
+        const auto ext = lower(m.path.extension().string());
+        if (index != 0 && ext == ".exe") {
+            redirect_tls_slot0(m);
+            if (index_rva) *reinterpret_cast<uint32_t*>(m.base + index_rva) = 0;
+        } else {
+            if (index_rva) *reinterpret_cast<uint32_t*>(m.base + index_rva) = index;
+        }
     }
     try {
         install_thread_block(m);
