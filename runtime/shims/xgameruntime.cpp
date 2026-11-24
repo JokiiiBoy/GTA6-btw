@@ -249,6 +249,7 @@ HRESULT STDMETHODCALLTYPE error_report(void*, HRESULT hr, const char* message) {
     if (XErrorCallback cb = g_error_callback.load()) cb(hr, message, g_error_context.load());
     return S_OK;
 }
+HRESULT __stdcall XErrorReport(HRESULT hr, const char* message) { return error_report(nullptr, hr, message); }
 void STDMETHODCALLTYPE error_set_callback(void*, XErrorCallback callback, void* context) {
     std::lock_guard<std::mutex> lock(g_error_mutex);
     g_error_context = context;
@@ -1342,6 +1343,7 @@ SHIM_TABLE(xgameruntime,
     XGR(XPackageGetMountPathSize),
     XGR(XPackageGetMountPath),
     XGR(XPackageIsPackagedProcess),
+    XGR(XErrorReport),
     // XTaskQueue (third_party/xtaskqueue)
     XGR(XTaskQueueCreate),
     XGR(XTaskQueueCreateComposite),
