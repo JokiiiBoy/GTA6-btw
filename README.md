@@ -7,13 +7,15 @@ GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida]
 ## Current progress
 
 - **Wine runtime path working:** cross-build `gta6rt.exe` with clang-cl/lld-link + xwin and run with `LEONIDA_SKIP_INT3=1 ./setup_leonida_wine.sh run`.
-- **Startup tracing:** JSONL traces + summaries via `tools/boot_trace.py`.
+- **Startup tracing:** JSONL traces + summaries via `tools/boot_trace.py`; `file_open_failed` now includes capture stacks.
 - **XMem fix:** fixed Wine/MSVC static-init issue in `placeholder_api()` so large Xbox `XMemVirtualAlloc` reservations succeed.
 - **TLS fix:** general EXE TLS slot-0 redirect for modules with non-zero TLS index. This fixed hardcoded `gs:[0x58]` slot-0 accesses and moved boot significantly further.
 - **GameInput fix:** added `GameInput.dll` ordinal `#1` alias for `GameInputCreate`; built with `LEONIDA_SDL3_FETCH=ON`.
 - **DirectStorage stub:** added minimal `xcrdapi.dll!DStorageGetFactory` stub to get past unimplemented DirectStorage factory.
 - **RAGE device mapping:** mapped `common:` and `platform:` device names to the game package root in the file system shim.
-- **Current blocker:** crash in `host:ucrtbase.dll+0x5fe3a` (write `0x0`) called from `game_scarlett_master.exe+0x5b29847` after config validation fails (`int3` at `+0x1d5cc69` skipped by `LEONIDA_SKIP_INT3`). The game tries to load `common:\data\version.txt` and `platform:\data\gameconfig.zmt` (now mapped, but files not present as loose files in this package dump), leaving config uninitialized.
+- **RPF/name search:** scanned the full 209GB dump with 6ixpack/sixng and gta6x (name recovery, structured recovery, `.zmt` scan, JOAAT hash checks) - no `version.txt` or `gameconfig.zmt` found by name/hash/extension/content.
+- **victory-gta6 / victory-fork:** ported the `common:`/`platform:` mapping to both forks (`crates/victory-hle/src/modules/files.rs`); TLS/GameInput/DStorage/XErrorReport fixes were already present.
+- **Current blocker:** gameconfig load fails (`platform:/data/gameconfig.zmt`, `common:/data/version.txt` not found), `int3` at `+0x2224517` skipped by `LEONIDA_SKIP_INT3`, bad config leads to crash at `game_scarlett_master.exe+0x5b29847` (`host:ucrtbase.dll+0x5fe3a`, memset write 0x0). Next options: supply correct files for this build, or add a temporary Leonida patch around config init to move boot forward.
 
 ## Quick start
 
