@@ -67,6 +67,9 @@ fn build() -> &'static [u8; 32] {
             limit,
             victory_shader::emit::view_heap_limit(),
             victory_shader::emit::host_max_wave(),
+            // Over 32, console wave32 pixel programs take each half wave as
+            // a console wave (`VICTORY_PS_HALVES`, below).
+            victory_shader::emit::host_pixel_wave(),
             // Which group barriers wait is part of the translation too.
             u32::from(victory_shader::emit::group_sync()),
             // And which clean-up passes ran over the translated code.
@@ -85,6 +88,7 @@ fn build() -> &'static [u8; 32] {
             "VICTORY_F16_NEAREST",
             "VICTORY_STRICT_JOINS",
             "VICTORY_MESH_OUTPUT_STRICT",
+            "VICTORY_PS_HALVES",
         ] {
             hash.update(name.as_bytes());
             hash.update(b"=");

@@ -2,7 +2,7 @@
 
 GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida](https://github.com/ItsNotRexed/Leonida), focused on getting the GTA6 Xbox build running further through its startup/runtime.
 
-> **Status: experimental.** With `victory/` under Proton the game boots, shows its loading screens and loads into the first story mission's world, but runs at about 0.1 fps there and the 3D scene is still black (the HUD draws). Not playable.
+> **Status: experimental.** With `victory-dexnom/` under Proton (RX 7700 XT, Mesa 26.3.1 RADV) the game boots, plays the opening cutscene with a lit 3D world and hands control to the player in the first mission ("Hold LT to interact"), at about 0.2-4.5 fps (about 3 fps in most scenes once the pipeline cache is warm). Not playable yet: too slow, and one of four long runs ended in a GPU page fault after 27 minutes (see below).
 
 ## Current progress
 
@@ -26,6 +26,13 @@ GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida]
   - *Black 3D world:* two things are needed, neither is in this repo; in game they were only tested together. (1) Microsoft's `d3dcompiler_47` in the prefix (`winetricks d3dcompiler_47`): Wine's (`cachyos-11.0-20261015`) fails to build the indirect-argument clamp and the ambient pass; without the clamp every indirect draw and dispatch is dropped. (2) vkd3d-proton master (tested: `71cae091`): with 5704, some VIctory shaders become invalid SPIR-V; their pipelines crash the driver, or are refused with the pipeline probe on. Replace `d3d12.dll` and `d3d12core.dll` in `<Proton>/files/lib/wine/vkd3d-proton/x86_64-windows/`; copies put into the prefix are overwritten by `proton run`.
   - *First-chance exception log:* the world load raises thousands (25,345 reports in one run); they are now only logged with `VICTORY_CRASH_FIRST_CHANCE=1`.
   - *Where the time goes now:* GPU timestamps show only ~25 ms of real GPU work per world frame, but 4-6 s per frame are spent waiting on fences. VRAM fills to 10.5 of 12 GB and ~7 GB spill to system memory (GTT): the driver moves memory around at each submission. Next: cut VRAM use (Belobug notes the world wants more than a 16 GB card) and look at vkd3d-proton master / Mesa git.
+- **victory-dexnom on Linux (2026-11-25, RX 7700 XT 12 GB, Ryzen 7 7700, 32 GB, Proton-CachyOS-Victory):**
+  - *Lit world, gameplay reached:* with Microsoft's `d3dcompiler_47` in the prefix (`WINEPREFIX=~/.local/share/victory-proton/pfx winetricks d3dcompiler_47`, using the compat tool's `wine`/`wineserver`) the indirect-argument clamp builds: indirect draws dropped per frame went from 1,272-2,881 to 0, draws per frame from ~400-2,000 to 3,300-9,000, and the cutscene and first room draw lit. Without it the log shows `E5005: Method 'InterlockedMax' is not defined on type 'RWByteAddressBuffer'` and the world stays black; the run script warns when the prefix still has Wine's DLL.
+  - *Pipeline wait:* `VICTORY_PIPELINE_WAIT_MS=100` (DexNom's default is 12 s per frame) and `VICTORY_SKIP_PIPELINES` for three compute pipelines that never finish under vkd3d-proton/RADV took world frames from ~0.07 fps to 0.2-4.5 fps. The early pipeline list (2,510 pipelines after the first long run) brings the world to ~3 fps in about 8 minutes instead of 25.
+  - *Where the time goes now:* in light scenes ~70-140 ms of copies, ~100-230 ms copying back and ~80-190 ms on the GPU per frame; heavy scenes (8,000-9,000 draws) take 1-3 s, mostly copies and copy-back. VRAM stays at ~10.2 of 11.4 GB and the texture sweep lets go of and remakes tens of thousands of texture copies a run.
+  - *GPU page fault (one run, after 27 min, VRAM ~89%):* `amdgpu: [gfxhub] page fault ... Faulty UTCL2 client ID: TCP`, ring gfx timeout and reset, then `DXGI_ERROR_DEVICE_REMOVED` (`0x887A0005`). A texture read hit an invalid page; the log shows the sweep letting go of texture copies right before. Not confirmed as the cause: a use-after-free of a swept texture is the working guess (`resource.rs` `let_go_idle`, whose idle time drops to 1 s above 85% VRAM). Other runs: 26 min and 18 min without a crash (the second with `VICTORY_LATE_WAIT=1`, KLBF Lab's setting for GPU hangs, at the same speed). Breadcrumbs for the next crash: `VKD3D_CONFIG=ignore_shared_fence,breadcrumbs WINEDEBUG=-all,err+vkd3d`.
+  - *Ported from [KLBF Lab](https://github.com/PastiiJay/klbf-lab) (GPL-3.0):* console wave32 pixel and vertex programs on a 64-lane host (RADV) take each 32-lane half as a console wave, for ballots, lane reads, `v_mbcnt` and wave reductions (`VICTORY_PS_HALVES=0` turns it off; the host's pixel wave width and the switch are in the shader cache key). Tested with the translator suite only, not yet in game. Not ported yet: `glc` global coherence (upstream VIctory #1271, needs the heap UAV inference and matching runtime views), DirectStorage page lists read at submit, FSR.
+  - *Series S (`VICTORY_CONSOLE=series-s`):* stayed on a black start screen for 3.5 minutes (KLBF Lab notes its menus can stay black until A/Enter is pressed); not used.
 - **Leonida path blocker:** gameconfig load fails (`platform:/data/gameconfig.zmt`, `common:/data/version.txt` not found), `int3` at `+0x2224517` skipped by `LEONIDA_SKIP_INT3`, bad config leads to crash at `game_scarlett_master.exe+0x5b29847` (`host:ucrtbase.dll+0x5fe3a`, memset write 0x0). Next options: supply correct files for this build, or add a temporary Leonida patch around config init to move boot forward.
 
 ## Quick start
@@ -59,6 +66,15 @@ VICTORY_TREE=victory ./scripts/run_victory_proton.sh # the Belobug-based tree be
 ```
 
 Each tree keeps its own caches (`~/.cache/<tree>/vkd3d`, and for victory-dexnom `AppData\Local\victory-dexnom\cache` in the prefix); saves are shared.
+
+For a lit world the prefix needs Microsoft's `d3dcompiler_47` (see "victory-dexnom on Linux" above). `VICTORY_CONSOLE` picks the console profile (`series-x` by default). To build for this machine's CPU only (Zen 4, AVX-512), without changing the repository's config:
+
+```bash
+cargo build --profile diag -p victory --features diagnostics --bins --target x86_64-pc-windows-msvc \
+  --config 'target.x86_64-pc-windows-msvc.rustflags=["-Ctarget-cpu=znver4"]'
+```
+
+The first run after a translator change translates every shader again.
 
 ## Run victory (Belobug AMD fork)
 
