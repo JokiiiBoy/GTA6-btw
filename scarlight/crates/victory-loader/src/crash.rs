@@ -399,7 +399,32 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
     // SAFETY: as above.
-    if FATAL.contains(&unsafe { (*(*info).ExceptionRecord).ExceptionCode }) {
+    let code = unsafe { (*(*info).ExceptionRecord).ExceptionCode };
+    if code == EXCEPTION_BREAKPOINT {
+        static SKIP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let skip = *SKIP.get_or_init(|| {
+            std::env::var_os("VICTORY_SKIP_INT3").is_some()
+                || std::env::var_os("VICTORY_SKIP_BREAKPOINTS").is_some()
+                || std::env::var_os("LEONIDA_SKIP_INT3").is_some()
+        });
+        if skip {
+            let context = unsafe { &mut *(*info).ContextRecord };
+            let rip = context.Rip as usize;
+            let (bytes, n) = unsafe { code_at(rip) };
+            let len = if n >= 2 && bytes[0] == 0xCD && bytes[1] == 0x03 {
+                2
+            } else {
+                1
+            };
+            static LOGGED: std::sync::Once = std::sync::Once::new();
+            LOGGED.call_once(|| {
+                eprintln!("VIctory: skipping breakpoints (VICTORY_SKIP_INT3/VICTORY_SKIP_BREAKPOINTS set)");
+            });
+            context.Rip = context.Rip.wrapping_add(len as u64);
+            return -1; // EXCEPTION_CONTINUE_EXECUTION
+        }
+    }
+    if FATAL.contains(&code) {
         // SAFETY: as above.
         unsafe { report("first-chance exception", info, false) };
     }
