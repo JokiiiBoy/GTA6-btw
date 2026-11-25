@@ -404,6 +404,67 @@ fn physical() -> MutexGuard<'static, Physical> {
     PHYSICAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Under Wine, sections shown whole by private memory instead of a view:
+/// the section's address (`Arc::as_ptr`), the private memory's start and
+/// length. vkd3d-proton's heaps opened on a view of a section are not the
+/// view's pages (the GPU reads zeros, its writes are lost), so the host GPU
+/// could not use the title's GPU heap in place and copied it, gigabytes a
+/// frame; private memory it shares correctly. Such a section's pages then
+/// live only there: DirectStorage writes go there too, and no other view of
+/// them is made (Grand Theft Auto VI makes none).
+static PRIVATE_WHOLE: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
+
+/// Whether a section shown whole gets private memory (Wine only;
+/// `VICTORY_WINE_SECTION_VIEWS=1` keeps the view, as before).
+fn private_whole() -> bool {
+    static ON: LazyLock<bool> =
+        LazyLock::new(|| on_wine() && std::env::var_os("VICTORY_WINE_SECTION_VIEWS").is_none());
+    *ON
+}
+
+/// Where slice `index` of `section` lives if the section is shown whole by
+/// private memory, with the bytes left there.
+fn private_slice(section: &Arc<Section>, index: usize) -> Option<(usize, usize)> {
+    let key = Arc::as_ptr(section) as usize;
+    let list = PRIVATE_WHOLE.lock().unwrap_or_else(|e| e.into_inner());
+    list.iter()
+        .find(|(k, _, _)| *k == key)
+        .and_then(|&(_, at, len)| (index * PAGE < len).then(|| (at + index * PAGE, len - index * PAGE)))
+}
+
+/// Replaces the placeholder `[at, at + len)` with committed private memory
+/// holding what the section's pages hold now. True if done.
+fn map_private_whole(at: usize, len: usize, section: &Arc<Section>) -> bool {
+    // What DirectStorage may already have written into the pages.
+    let Some(mut old) = View::map(&Slice { section: section.clone(), index: 0 }, len / PAGE) else {
+        return false;
+    };
+    // SAFETY: replaces exactly the placeholder `[at, at + len)`; the host
+    // refuses anything else.
+    let got = unsafe {
+        VirtualAlloc2(
+            GetCurrentProcess(),
+            at as *const c_void,
+            len,
+            MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
+            PAGE_READWRITE,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if got as usize != at {
+        tracing::warn!(at = format_args!("{at:#x}"), len, error = %std::io::Error::last_os_error(), "private memory for a reservation shown whole failed");
+        return false;
+    }
+    // SAFETY: `len` committed bytes at `at`, ours alone until the title runs on.
+    unsafe { std::slice::from_raw_parts_mut(at as *mut u8, len) }.copy_from_slice(old.bytes());
+    PRIVATE_WHOLE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((Arc::as_ptr(section) as usize, at, len));
+    true
+}
+
 /// `count` is in and out (pages wanted, pages given); all or nothing here.
 pub extern "system" fn XMemAllocatePhysicalPages(
     flags: u64,
@@ -489,6 +550,9 @@ pub extern "system" fn XMemFreePhysicalPages(n: usize, pages: *const usize) -> B
 struct View {
     at: MEMORY_MAPPED_VIEW_ADDRESS,
     len: usize,
+    /// A view we mapped (unmapped when dropped), not private memory that
+    /// shows a section whole.
+    owned: bool,
 }
 
 impl View {
@@ -496,6 +560,13 @@ impl View {
     fn map(slice: &Slice, n: usize) -> Option<View> {
         use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
         let (offset, len) = ((slice.index * PAGE) as u64, n * PAGE);
+        if let Some((at, room)) = private_slice(&slice.section, slice.index) {
+            return (len <= room).then_some(View {
+                at: MEMORY_MAPPED_VIEW_ADDRESS { Value: at as *mut c_void },
+                len,
+                owned: false,
+            });
+        }
         // SAFETY: slices of a section we own; the view is ours until dropped.
         let at = unsafe {
             MapViewOfFile(
@@ -509,7 +580,7 @@ impl View {
         if at.Value.is_null() {
             return None;
         }
-        let view = View { at, len };
+        let view = View { at, len, owned: true };
         commit(at.Value as usize, len).then_some(view)
     }
 
@@ -524,6 +595,9 @@ impl View {
 impl Drop for View {
     fn drop(&mut self) {
         use windows_sys::Win32::System::Memory::UnmapViewOfFile;
+        if !self.owned {
+            return;
+        }
         // SAFETY: our view.
         unsafe { UnmapViewOfFile(self.at) };
     }
@@ -730,10 +804,11 @@ fn map_whole(physical: &mut Physical, base: usize, pages: &[usize]) -> bool {
             const COALESCE: u32 = 1;
             // SAFETY: placeholders of one reservation, none mapped.
             unsafe { VirtualFree(at as *mut c_void, len, MEM_RELEASE | COALESCE) };
-            if !map_view(at, len, &all) {
+            let private = private_whole() && map_private_whole(at, len, &first.section);
+            if !private && !map_view(at, len, &all) {
                 return false;
             }
-            tracing::info!(at = format_args!("{at:#x}"), len, "a reservation of physical pages shown whole");
+            tracing::info!(at = format_args!("{at:#x}"), len, private, "a reservation of physical pages shown whole");
             victory_gpu::title_memory_remapped(at, len);
             physical.views.insert(at, (len, all));
             physical.whole.push((at, len, first.section.clone()));
@@ -908,6 +983,11 @@ fn map(physical: &mut Physical, base: usize, len: usize, slice: Slice) -> bool {
 /// Replaces the placeholder `[base, base + len)` with a view of `slice` and
 /// the slices after it, committed.
 fn map_view(base: usize, len: usize, slice: &Slice) -> bool {
+    if private_slice(&slice.section, slice.index).is_some() {
+        // shortcut: this view shows the section, not the private memory
+        // that holds its pages now.
+        tracing::warn!(address = format_args!("{base:#x}"), len, "another view of pages shown whole by private memory");
+    }
     // SAFETY: replaces the placeholder `[base, base + len)` with a view of
     // the section; the host refuses anything that is not that placeholder.
     let view = unsafe {

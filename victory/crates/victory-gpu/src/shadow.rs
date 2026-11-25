@@ -1109,11 +1109,8 @@ fn direct(address: u64, end: u64) -> Option<Arc<Shadow>> {
         return None;
     }
     let device = DEVICE.get_or_init(|| {
-        // Diagnostics: copies, as without this. Under Wine (vkd3d-proton)
-        // the host GPU reads such heaps as zeros (every frame black at full
-        // speed), so it copies there unless `VICTORY_DIRECT_MEMORY=1`.
-        let on = std::env::var_os("VICTORY_COPY_MEMORY").is_none()
-            && (!on_wine() || std::env::var_os("VICTORY_DIRECT_MEMORY").is_some_and(|v| v == "1"));
+        // Diagnostics: copies, as without this.
+        let on = std::env::var_os("VICTORY_COPY_MEMORY").is_none();
         let device: Option<ID3D12Device13> = if on {
             host().and_then(|h| h.device.cast().ok())
         } else {
@@ -1145,6 +1142,14 @@ fn direct(address: u64, end: u64) -> Option<Arc<Shadow>> {
     }
     let page = PAGE as u64;
     let window = run_of(address & !(page - 1), end.next_multiple_of(page)).and_then(|(start, stop)| {
+        // Under Wine (vkd3d-proton, RADV) a heap opened on a view of a
+        // section is not the view's pages: the GPU reads zeros and its writes
+        // never reach the title (every frame black, the title waiting on the
+        // GPU). Private memory is shared correctly. `VICTORY_DIRECT_MEMORY=1`
+        // opens sections anyway (to retest newer vkd3d-proton).
+        if on_wine() && mapped_view(start) && !std::env::var_os("VICTORY_DIRECT_MEMORY").is_some_and(|v| v == "1") {
+            return None;
+        }
         // Read-only guards would refuse the GPU's writes.
         crate::watch::writing(start as usize, (stop - start) as usize);
         // SAFETY: committed memory; the heap keeps its pages.
@@ -1949,7 +1954,11 @@ impl Shadow {
             before.entry(tile).or_insert_with(|| {
                 #[cfg(feature = "diagnostics")]
                 SPARSE_WRITES[1].fetch_add(PAGE as u64, Ordering::Relaxed);
-                let whole = data as usize & !(PAGE - 1);
+                // The tile's start: its title offset's, not the pointer
+                // rounded down (host mappings are 64 KiB aligned on
+                // Windows, only 4 KiB under vkd3d-proton, where rounding
+                // read before the mapping).
+                let whole = data as usize - at % PAGE;
                 let mut buf = pooled_tile();
                 // SAFETY: the tile's mapping.
                 buf.extend_from_slice(unsafe { std::slice::from_raw_parts(whole as *const u8, PAGE) });
@@ -2546,4 +2555,14 @@ fn on_wine() -> bool {
         }
     });
     *WINE
+}
+
+/// Whether `address` lies in a view of a section (not private memory).
+#[cfg(windows)]
+fn mapped_view(address: u64) -> bool {
+    use windows_sys::Win32::System::Memory::{MEM_MAPPED, MEMORY_BASIC_INFORMATION, VirtualQuery};
+    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: a query into a local of the size passed.
+    let n = unsafe { VirtualQuery(address as *const _, &mut info, size_of::<MEMORY_BASIC_INFORMATION>()) };
+    n != 0 && info.Type == MEM_MAPPED
 }
