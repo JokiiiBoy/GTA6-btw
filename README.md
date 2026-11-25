@@ -46,7 +46,19 @@ Inspect traces:
 python tools/boot_trace.py --latest ~/leonida-wine-logs
 ```
 
-## Run victory (Belobug AMD fork, recommended)
+## Run victory-dexnom (DexNom Runtime + Wine fixes, default)
+
+`victory-dexnom/` is [DexNom/VIctory](https://github.com/DexNom/VIctory) (upstream VIctory up to `940d32f` + the victory-world-runtime Radeon line + DexNom's shader fixes; 25,742 of 25,758 shaders translate) with GTA6-btw's Wine/Linux pieces ported: Wine copy-back into write-watched pages, `VICTORY_NO_WATCHDOG` hooks, `VICTORY_LOG_FILE`, the 1.0.2.1 int3 NOP and `VICTORY_SKIP_INT3`, the early pipeline list kept without a host library, and stack dumps (`VICTORY_STACKS`) written to the log. DexNom's in-place title memory is off by default (`VICTORY_INPLACE`), so the Wine section-view problem does not arise. Its BCPack tables come from upstream (`crates/victory-formats/src/bcpack-tables.bin`, git-ignored, SHA-256 `1F1D4760…`).
+
+```bash
+cd victory-dexnom && cargo build --profile diag -p victory --features diagnostics --bins --target x86_64-pc-windows-msvc && cd ..
+./scripts/run_victory_proton.sh                      # VICTORY_TREE=victory-dexnom is the default
+VICTORY_TREE=victory ./scripts/run_victory_proton.sh # the Belobug-based tree below
+```
+
+Each tree keeps its own caches (`~/.cache/<tree>/vkd3d`, and for victory-dexnom `AppData\Local\victory-dexnom\cache` in the prefix); saves are shared.
+
+## Run victory (Belobug AMD fork)
 
 ```bash
 cd victory && cargo build --profile diag -p victory --features diagnostics --target x86_64-pc-windows-msvc && cd ..
@@ -89,7 +101,7 @@ export GTA6_DIR="/path/to/GTA6.Xbox.v1.0.2.1"
 | `LEONIDA_SKIP_INT3=1` | Diagnostic: skip soft int3 asserts during boot tracing |
 | `LEONIDA_WINEPREFIX` | Override Wine prefix (default: `~/.local/share/leonida-wine`) |
 | `LEONIDA_XWIN_SDK` | Override xwin SDK path (default: `~/.local/share/xwin-sdk`) |
-| `VICTORY_CACHE_DIR` | Where the run script keeps vkd3d-proton's cache (default `~/.cache/victory`) |
+| `VICTORY_HOST_CACHE_DIR` | Where the run script keeps vkd3d-proton's cache (default `~/.cache/victory`) |
 | `VICTORY_DIRECT_MEMORY=1` | victory: let the GPU open section views in place under Wine anyway (to retest newer vkd3d-proton) |
 | `VICTORY_WINE_SECTION_VIEWS=1` | victory: keep the GPU heap a section view under Wine (old behaviour) |
 | `VICTORY_COPY_MEMORY=1` | victory: copy all title memory, never share it with the GPU |

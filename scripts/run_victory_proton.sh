@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run victory/ (Belobug's AMD fork + Wine fixes + GTA6-btw patches) under a
-# Proton compat tool. Every setting can be overridden from the environment.
+# Run a VIctory tree under a Proton compat tool. Every setting can be
+# overridden from the environment.
+#   VICTORY_TREE=victory-dexnom (default): DexNom Runtime + GTA6-btw's Wine fixes
+#   VICTORY_TREE=victory: Belobug's AMD fork + GTA6-btw's Wine fixes
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GTA6_DIR="${GTA6_DIR:-/home/joki/Downloads/GTA6.Xbox.v1.0.2.1}"
@@ -10,7 +12,8 @@ GAME_EXE="${GAME_EXE:-$GTA6_DIR/game_scarlett_master.exe}"
 PROTON="${PROTON:-/home/joki/.local/share/Steam/compatibilitytools.d/Proton-CachyOS-Victory/proton}"
 COMPAT_DATA="${STEAM_COMPAT_DATA_PATH:-/home/joki/.local/share/victory-proton}"
 STEAM_CLIENT="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-/home/joki/.local/share/Steam}"
-TARGET_DIR="$ROOT/victory/target/x86_64-pc-windows-msvc"
+VICTORY_TREE="${VICTORY_TREE:-victory-dexnom}"
+TARGET_DIR="$ROOT/$VICTORY_TREE/target/x86_64-pc-windows-msvc"
 VICTORY_EXE="${VICTORY_EXE:-}"
 if [[ -z "$VICTORY_EXE" ]]; then
   for candidate in "$TARGET_DIR/diag/victory.exe" "$TARGET_DIR/release/victory.exe" "$TARGET_DIR/debug/victory.exe"; do
@@ -41,7 +44,15 @@ export VKD3D_CONFIG="${VKD3D_CONFIG:-ignore_shared_fence}"
 # vkd3d-proton's compiled pipelines (it writes beside the working directory
 # otherwise) and Mesa's RADV shader cache (1 GB by default, which the world's
 # pipelines outgrow, so they were compiled again).
-CACHE_DIR="${VICTORY_CACHE_DIR:-$HOME/.cache/victory}"
+# Each tree keeps its own caches: their shader translations and pipeline
+# keys differ.
+if [[ "$VICTORY_TREE" == "victory" ]]; then
+  CACHE_DIR="${VICTORY_HOST_CACHE_DIR:-$HOME/.cache/victory}"
+else
+  CACHE_DIR="${VICTORY_HOST_CACHE_DIR:-$HOME/.cache/$VICTORY_TREE}"
+  # VIctory's own cache (translations, early pipeline list); saves stay shared.
+  export VICTORY_CACHE_DIR="${VICTORY_CACHE_DIR:-C:\\users\\steamuser\\AppData\\Local\\$VICTORY_TREE\\cache}"
+fi
 mkdir -p "$CACHE_DIR/vkd3d"
 # (with a path set vkd3d-proton names the file after the exe; an older
 # cache left in the repository by earlier runs is moved over under that name)
@@ -62,10 +73,11 @@ if [[ ! -x "$PROTON" ]]; then
 fi
 if [[ -z "$VICTORY_EXE" || ! -f "$VICTORY_EXE" ]]; then
   echo "victory.exe not found under $TARGET_DIR" >&2
-  echo "Build: cd victory && cargo build --profile diag -p victory --features diagnostics --target x86_64-pc-windows-msvc" >&2
+  echo "Build: cd $VICTORY_TREE && cargo build --profile diag -p victory --features diagnostics --bins --target x86_64-pc-windows-msvc" >&2
   exit 1
 fi
 
+echo "tree:        $VICTORY_TREE"
 echo "victory.exe: $VICTORY_EXE"
 echo "trace log:   $TRACE_LOG"
 exec "$PROTON" run "$VICTORY_EXE" run --execute --console series-x "$GAME_EXE" "$@"
