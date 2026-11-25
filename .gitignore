@@ -26,6 +26,8 @@ carve/
 build/
 build-*/
 bin/
+# ...but not Cargo binary targets (victory-play.rs, victory-warm.rs)
+!**/src/bin/
 obj/
 __pycache__/
 *.pyc
