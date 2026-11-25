@@ -23,13 +23,27 @@ pub fn init(default_level: &str) {
         .ok()
         .and_then(|v| EnvFilter::try_new(v).ok())
         .unwrap_or_else(|| EnvFilter::new(default_level));
+    let log_file = std::env::var_os("VICTORY_LOG_FILE").and_then(|p| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .ok()
+    });
     let _ = tracing_subscriber::registry()
         .with(CAP)
         .with(filter)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(true)
-                .with_writer(std::io::stderr),
+                .with_writer(move || -> Box<dyn std::io::Write> {
+                    if let Some(f) = &log_file {
+                        if let Ok(clone) = f.try_clone() {
+                            return Box::new(clone);
+                        }
+                    }
+                    Box::new(std::io::stderr())
+                }),
         )
         .try_init();
 }

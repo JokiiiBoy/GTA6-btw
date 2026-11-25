@@ -459,6 +459,16 @@ impl HostPipeline {
         for (s, _) in &stages {
             s.translated()?;
         }
+        #[cfg(all(windows, feature = "diagnostics"))]
+        {
+            for (s, _) in &stages {
+                let h = s.hash.as_str();
+                if super::is_hash_skipped(h) {
+                    tracing::warn!(?shaders, hash=%h, "host pipeline skipped by VICTORY_SKIP_PIPELINES");
+                    return None;
+                }
+            }
+        }
         let host = host()?;
 
         // The root signature the translated shaders' bindings define.

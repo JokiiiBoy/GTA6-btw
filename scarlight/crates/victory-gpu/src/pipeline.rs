@@ -319,13 +319,33 @@ impl Shader {
 }
 
 #[cfg(all(windows, feature = "diagnostics"))]
-fn skipped_shader(p: &Pipeline) -> Option<&str> {
+const DEFAULT_SKIP_PIPELINES: &[&str] = &[
+    // Cleared: Proton Experimental vkd3d-proton DLLs seem to handle formerly crashy PSOs.
+    // Re-add hashes here if fastfail/AV returns.
+];
+
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skip_hashes() -> &'static Vec<String> {
     static HASHES: OnceLock<Vec<String>> = OnceLock::new();
-    static WAVE64: OnceLock<Vec<&'static str>> = OnceLock::new();
-    let hashes = HASHES.get_or_init(|| {
+    HASHES.get_or_init(|| {
+        let mut out: Vec<String> = DEFAULT_SKIP_PIPELINES.iter().map(|s| s.to_string()).collect();
         let value = std::env::var("VICTORY_SKIP_PIPELINES").unwrap_or_default();
-        parse_skip_hashes(&value)
-    });
+        out.extend(parse_skip_hashes(&value));
+        out.sort();
+        out.dedup();
+        out
+    })
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn is_hash_skipped(hash: &str) -> bool {
+    skip_hashes().iter().any(|h| h.eq_ignore_ascii_case(hash))
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skipped_shader(p: &Pipeline) -> Option<&str> {
+    static WAVE64: OnceLock<Vec<&'static str>> = OnceLock::new();
+    let hashes = skip_hashes();
     let wave64 = WAVE64.get_or_init(|| {
         let value = std::env::var("VICTORY_SKIP_WAVE64").unwrap_or_default();
         parse_skip_stages(&value)
@@ -336,7 +356,8 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
     p.shaders
         .iter()
         .find(|shader| {
-            hashes.contains(&shader.hash) || (wave64.contains(&shader.stage) && shader.wave64())
+            hashes.iter().any(|h| h.eq_ignore_ascii_case(&shader.hash))
+                || (wave64.contains(&shader.stage) && shader.wave64())
         })
         .map(|shader| shader.hash.as_str())
 }
