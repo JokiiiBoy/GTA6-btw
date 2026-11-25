@@ -182,9 +182,10 @@ const PORTABLE_VIEWS: u32 = 1_000_000;
 /// Slots past the title's in a view heap, for tables a draw needs made
 /// afresh (constant buffers copied per draw). A list holds the slots it
 /// took until it is reset (its submissions have run) or released.
-/// 2^16 ran out seconds into the world (every world run on an RX 9070 XT,
-/// each a device removal shortly after; #59).
-const DYNAMIC: u32 = 1 << 18;
+/// 2^16 ran out seconds into the world; 2^18 still ran out in heavy
+/// frames (dropped draws). 2^20 gives room for ~7k-draw world frames.
+/// (Ported from Belobug/VIctory-Belobug-AMD 2aad398)
+const DYNAMIC: u32 = 1 << 20;
 
 /// The dynamic slots of a heap whose host would not take [`DYNAMIC`] more
 /// (a capped heap, NVIDIA): the title's slots keep their room first.

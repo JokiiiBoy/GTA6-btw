@@ -22,7 +22,10 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleFileNameW, GetModuleHandleExW, GetProcAddress, GetModuleHandleA,
+};
+use windows_sys::Win32::System::Memory::{
+    VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits;
 
@@ -119,8 +122,19 @@ pub fn report_crashes() {
     // given; the title's own filter, once it sets one, takes the place of
     // ours and calls `report_unhandled` first.
     unsafe {
-        AddVectoredExceptionHandler(0, Some(handler));
+        AddVectoredExceptionHandler(1, Some(handler));
         SetUnhandledExceptionFilter(Some(filter));
+    }
+    // The title/Breakpad may register its own VEH later and take first place;
+    // only re-register when breakpoint skipping is requested.
+    let skip_bp = std::env::var_os("VICTORY_SKIP_INT3").is_some()
+        || std::env::var_os("VICTORY_SKIP_BREAKPOINTS").is_some()
+        || std::env::var_os("LEONIDA_SKIP_INT3").is_some();
+    if skip_bp {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            unsafe { AddVectoredExceptionHandler(1, Some(handler)); }
+        });
     }
 }
 
@@ -407,15 +421,12 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
                 || std::env::var_os("VICTORY_SKIP_BREAKPOINTS").is_some()
                 || std::env::var_os("LEONIDA_SKIP_INT3").is_some()
         });
+        let context = unsafe { &mut *(*info).ContextRecord };
+        let rip = context.Rip as usize;
+        let (bytes, n) = unsafe { code_at(rip) };
+        let len = if n >= 2 && bytes[0] == 0xCD && bytes[1] == 0x03 { 2 } else { 1 };
+        eprintln!("VIctory: breakpoint at {:#x} skip={skip} len={len}", rip);
         if skip {
-            let context = unsafe { &mut *(*info).ContextRecord };
-            let rip = context.Rip as usize;
-            let (bytes, n) = unsafe { code_at(rip) };
-            let len = if n >= 2 && bytes[0] == 0xCD && bytes[1] == 0x03 {
-                2
-            } else {
-                1
-            };
             static LOGGED: std::sync::Once = std::sync::Once::new();
             LOGGED.call_once(|| {
                 eprintln!("VIctory: skipping breakpoints (VICTORY_SKIP_INT3/VICTORY_SKIP_BREAKPOINTS set)");

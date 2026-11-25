@@ -106,10 +106,18 @@ pub fn prepare(original: &[u8]) -> Result<PreparedImage, PrepareError> {
         }
     }
 
+    let original_hash = blake3::hash(original);
+    // Known crash-site: int3 in 1.0.2.1 at RVA 0x5149aec causes
+    // EXCEPTION_BREAKPOINT that Breakpad/game VEH handles before our VEH.
+    // NOP it in the prepared image so no exception is raised.
+    if original_hash.to_hex().starts_with("b99f876b74d4a77f") {
+        nop_breakpoint(&mut bytes, &info, 0x5149aec, "1.0.2.1 int3@0x5149aec");
+    }
+
     Ok(PreparedImage {
         info,
         bytes,
-        original_hash: blake3::hash(original),
+        original_hash,
     })
 }
 
@@ -171,6 +179,24 @@ fn write(bytes: &mut [u8], at: usize, v: &[u8]) -> Result<(), PrepareError> {
         .ok_or(PrepareError::Patch("header field outside of file"))?
         .copy_from_slice(v);
     Ok(())
+}
+
+fn nop_breakpoint(bytes: &mut [u8], info: &ImageInfo, rva: u32, what: &str) {
+    let Some(at) = info.rva_to_file_offset(rva) else {
+        tracing::warn!(what, rva = format_args!("{rva:#x}"), "breakpoint patch skipped: RVA not file-backed");
+        return;
+    };
+    let at = at as usize;
+    let Some(byte) = bytes.get_mut(at) else {
+        tracing::warn!(what, rva = format_args!("{rva:#x}"), "breakpoint patch skipped: out of range");
+        return;
+    };
+    if *byte != 0xCC {
+        tracing::warn!(what, rva = format_args!("{rva:#x}"), found = format_args!("{:#x}", *byte), "breakpoint patch skipped: expected int3");
+        return;
+    }
+    *byte = 0x90;
+    tracing::info!(what, rva = format_args!("{rva:#x}"), "breakpoint NOP patched in prepared image");
 }
 
 #[cfg(test)]
