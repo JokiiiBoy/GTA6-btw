@@ -69,6 +69,15 @@ D3DC="$COMPAT_DATA/pfx/drive_c/windows/system32/d3dcompiler_47.dll"
 if [[ ! -f "$D3DC" ]] || grep -qa "Wine builtin DLL" "$D3DC"; then
   echo "warning: no native d3dcompiler_47.dll in the prefix; the 3D world will stay black" >&2
 fi
+# How long a frame waits for pipelines still being compiled before it draws
+# without them. DexNom's default is 12 s per frame ("the picture before frame
+# rate"); under vkd3d-proton/RADV three compute pipelines never finish, so
+# every world frame spent the whole 12 s waiting (0.07 fps). Pipelines used
+# before are compiled ahead from the early list, so a short wait loses little.
+export VICTORY_PIPELINE_WAIT_MS="${VICTORY_PIPELINE_WAIT_MS:-100}"
+# Those three (1.0.2.1, RADV via vkd3d-proton 2026-11): left out instead of
+# waited for every frame. Diagnostics builds only.
+export VICTORY_SKIP_PIPELINES="${VICTORY_SKIP_PIPELINES:-559d9f0184e15fe3,a1b20bc47e3c9597,e8c962358d862e3f}"
 # GTA6-btw: skip the title's soft int3 asserts (diagnostic aid, not a fix).
 export VICTORY_SKIP_INT3="${VICTORY_SKIP_INT3:-1}"
 # Opt in to probing each new pipeline in a child process first
