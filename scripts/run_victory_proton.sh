@@ -80,6 +80,10 @@ export VICTORY_PIPELINE_WAIT_MS="${VICTORY_PIPELINE_WAIT_MS:-100}"
 export VICTORY_SKIP_PIPELINES="${VICTORY_SKIP_PIPELINES:-559d9f0184e15fe3,a1b20bc47e3c9597,e8c962358d862e3f}"
 # GTA6-btw: skip the title's soft int3 asserts (diagnostic aid, not a fix).
 export VICTORY_SKIP_INT3="${VICTORY_SKIP_INT3:-1}"
+# Console profile: series-x (default) or series-s. Series S renders at
+# 1280x720: far less video memory and fewer copies, which a 12 GB card needs
+# (KLBF Lab's recommended setting).
+VICTORY_CONSOLE="${VICTORY_CONSOLE:-series-x}"
 # Opt in to probing each new pipeline in a child process first
 # (VICTORY_PROBE_PIPELINES=1); slow on the first run, so off by default.
 
@@ -95,5 +99,6 @@ fi
 
 echo "tree:        $VICTORY_TREE"
 echo "victory.exe: $VICTORY_EXE"
+echo "console:     $VICTORY_CONSOLE"
 echo "trace log:   $TRACE_LOG"
-exec "$PROTON" run "$VICTORY_EXE" run --execute --console series-x "$GAME_EXE" "$@"
+exec "$PROTON" run "$VICTORY_EXE" run --execute --console "$VICTORY_CONSOLE" "$GAME_EXE" "$@"

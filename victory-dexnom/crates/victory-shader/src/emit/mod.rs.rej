@@ -1,0 +1,11 @@
+--- crates/victory-shader/src/emit/mod.rs
++++ crates/victory-shader/src/emit/mod.rs
+@@ -106,7 +106,7 @@ use crate::native::{HwStage, NativeProgram, RootType};
+ use crate::{ShaderError, io, ir, resource, structure};
+ 
+ pub use sampler::StaticSampler;
+-pub use lower::set_host_max_wave;
++pub use lower::{set_host_max_wave, set_host_pixel_wave};
+ pub use rect::rect_list_gs;
+ pub use shader::{
+     MEMORY_FAULTS, MEMORY_PAGES, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
