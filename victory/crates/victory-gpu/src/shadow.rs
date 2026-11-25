@@ -1109,8 +1109,11 @@ fn direct(address: u64, end: u64) -> Option<Arc<Shadow>> {
         return None;
     }
     let device = DEVICE.get_or_init(|| {
-        // Diagnostics: copies, as without this.
-        let on = std::env::var_os("VICTORY_COPY_MEMORY").is_none();
+        // Diagnostics: copies, as without this. Under Wine (vkd3d-proton)
+        // the host GPU reads such heaps as zeros (every frame black at full
+        // speed), so it copies there unless `VICTORY_DIRECT_MEMORY=1`.
+        let on = std::env::var_os("VICTORY_COPY_MEMORY").is_none()
+            && (!on_wine() || std::env::var_os("VICTORY_DIRECT_MEMORY").is_some_and(|v| v == "1"));
         let device: Option<ID3D12Device13> = if on {
             host().and_then(|h| h.device.cast().ok())
         } else {
@@ -2529,4 +2532,18 @@ mod tests {
             baseline[2].as_secs_f64() / cached[2].as_secs_f64(),
         );
     }
+}
+
+/// Whether we run under Wine (its ntdll exports `wine_get_version`).
+#[cfg(windows)]
+fn on_wine() -> bool {
+    static WINE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        // SAFETY: plain lookups in ntdll, always loaded.
+        unsafe {
+            let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr().cast());
+            !ntdll.is_null() && GetProcAddress(ntdll, c"wine_get_version".as_ptr().cast()).is_some()
+        }
+    });
+    *WINE
 }

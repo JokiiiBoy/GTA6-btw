@@ -15,8 +15,13 @@ with these on top:
 | `VICTORY_LOG_FILE`, `VICTORY_SKIP_INT3`/`LEONIDA_SKIP_INT3`, 1.0.2.1 int3 NOP at `0x5149aec` | GTA6-btw's scarlight work |
 
 Not carried over: Scarlight `ffa1310` (indirect clamp built without the
-system HLSL compiler). Belobug compiles its clamp, compose and ambient shaders
-with `D3DCompile`, so under Wine the prefix needs a native `d3dcompiler_47.dll`
-(see `scripts/run_victory_proton.sh`).
+system HLSL compiler) and `3f972c3` (Belobug already has a newer form).
+Belobug compiles its clamp and ambient shaders with `D3DCompile`; Wine's
+builtin `d3dcompiler_47` handles them (`argument_clamp_builds` and
+`ambient_pass_builds` pass under the victory-proton prefix).
+
+Known under Wine: `pipeline::library::tests::concurrent_atomic_writes_publish_one_complete_file`
+fails (eight threads renaming over one file at once); the game's saves are
+serialised by a lock, so it does not apply at run time.
 
 The older Scarlight-based tree is still in `../scarlight/`.

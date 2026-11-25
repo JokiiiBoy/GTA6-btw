@@ -17,7 +17,8 @@ GTA6-btw is an experimental Linux/Wine boot-tracing workspace based on [Leonida]
 - **victory-gta6 / victory-fork:** ported the `common:`/`platform:` mapping to both forks (`crates/victory-hle/src/modules/files.rs`); TLS/GameInput/DStorage/XErrorReport fixes were already present.
 - **victory-fork on Linux (Proton-CachyOS):** cross-compiled `victory.exe` for `x86_64-pc-windows-msvc` on Linux using xwin/clang-cl/llvm-lib. Subprocess **probe** pipeline creation in `victory-gpu` (hidden `_pipeline-helper`): child probes PSO creation; on crash/fastfail it refuses, on success parent creates in-process. Avoids vkd3d-proton `__fastfail`/abort kills. Fixed a probe-build bug where missing pipeline library caused all recipe pipelines to be refused with `0xFFFFFFFF` (`drawn=0`). Needs retest. Wine-only run renders white/`drawn=0`.
 - **Scarlight (Linux/AMD-focused victory fork):** copied to `scarlight/` (from `pablogonz12/Scarlight`). Ported SEH-guarded PSO creation + subprocess probe pipeline isolation (`VICTORY_PROBE_PIPELINES=1`, hidden `_pipeline-helper`) so vkd3d-proton fastfail/abort PSO crashes are refused instead of killing the process. Using Proton Experimental vkd3d-proton `d3d12.dll`/`d3d12core.dll` overlays removed PSO creation refusals/crashes; a stripped custom compat tool is at `/home/joki/.local/share/Steam/compatibilitytools.d/Proton-CachyOS-Victory`. Cross-checks pass for `victory-gpu` and `victory` on `x86_64-pc-windows-msvc`.
-- **Current blocker:** gameconfig load fails (`platform:/data/gameconfig.zmt`, `common:/data/version.txt` not found), `int3` at `+0x2224517` skipped by `LEONIDA_SKIP_INT3`, bad config leads to crash at `game_scarlett_master.exe+0x5b29847` (`host:ucrtbase.dll+0x5fe3a`, memset write 0x0). Next options: supply correct files for this build, or add a temporary Leonida patch around config init to move boot forward.
+- **victory/ (Belobug AMD fork, current main path):** `victory/` is [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) (lit world, vehicles, distant trees on AMD/Windows) plus Scarlight's Wine/vkd3d-proton fixes (write-watched copy-back, root-signature heap-flag retry, no integer-target blending, `VICTORY_NO_WATCHDOG`) and this repo's SEH/probe PSO isolation, `VICTORY_LOG_FILE`, and int3 handling. See `victory/UPSTREAM.md`. Under Proton-CachyOS-Victory it boots, applies the watchdog hooks and 1.0.2.1 int3 patch, streams the archives and presents at 60 fps on the front-end screens.
+- **Leonida path blocker:** gameconfig load fails (`platform:/data/gameconfig.zmt`, `common:/data/version.txt` not found), `int3` at `+0x2224517` skipped by `LEONIDA_SKIP_INT3`, bad config leads to crash at `game_scarlett_master.exe+0x5b29847` (`host:ucrtbase.dll+0x5fe3a`, memset write 0x0). Next options: supply correct files for this build, or add a temporary Leonida patch around config init to move boot forward.
 
 ## Quick start
 
@@ -39,7 +40,17 @@ Inspect traces:
 python tools/boot_trace.py --latest ~/leonida-wine-logs
 ```
 
-## Run Scarlight (experimental)
+## Run victory (Belobug AMD fork, recommended)
+
+```bash
+cd victory && cargo build --profile diag -p victory --features diagnostics --target x86_64-pc-windows-msvc && cd ..
+export GTA6_DIR="/path/to/GTA6.Xbox.v1.0.2.1"
+./scripts/run_victory_proton.sh
+```
+
+The script sets Belobug's (`VICTORY_PRESENT_TARGET=1x1:1`, `VICTORY_HAIR=1`) and Scarlight's Linux settings (`VICTORY_NO_WATCHDOG=1`, `VKD3D_CONFIG=ignore_shared_fence`), logs to `/tmp/opencode/victory-trace.log`, and picks the RX 7700 XT. The first run into the world translates every shader and builds ~2,500 pipelines; the loading screen can sit frozen for minutes. `VICTORY_PROBE_PIPELINES=1` probes each new pipeline in a child process first.
+
+## Run Scarlight (older, experimental)
 
 ```bash
 # Build Scarlight (x64 Windows target, from Linux)
