@@ -51,3 +51,12 @@ the GPU uses it in place again: per-frame refreshes fell from 6-10 GB to about
 down to 64 KiB. Windows maps heaps 64 KiB aligned; vkd3d-proton only 4 KiB, so
 it read before the mapping (`ucrtbase` memcpy access violation about three
 minutes in, during the world's first load). It now subtracts the offset.
+
+## Early pipeline list without a host pipeline library
+
+vkd3d-proton refuses `CreatePipelineLibrary`, and `library::save` returned
+before writing `early-pipelines.txt` when there was no library, so under Wine
+no pipeline was ever started early. The list is now saved on its own (second
+run: 1,584 pipelines started early, none made at draw time). The frame-rate
+line is preceded by "submission costs per frame" (ExecuteCommandLists, fence
+waits, UpdateTileMappings), which showed the world's frames waiting on fences.

@@ -37,6 +37,20 @@ export VICTORY_HAIR="${VICTORY_HAIR:-1}"
 # the process during long first-run pipeline builds; vkd3d-proton fences.
 export VICTORY_NO_WATCHDOG="${VICTORY_NO_WATCHDOG:-1}"
 export VKD3D_CONFIG="${VKD3D_CONFIG:-ignore_shared_fence}"
+# Shader/pipeline caches, kept between runs and out of the repository:
+# vkd3d-proton's compiled pipelines (it writes beside the working directory
+# otherwise) and Mesa's RADV shader cache (1 GB by default, which the world's
+# pipelines outgrow, so they were compiled again).
+CACHE_DIR="${VICTORY_CACHE_DIR:-$HOME/.cache/victory}"
+mkdir -p "$CACHE_DIR/vkd3d"
+# (with a path set vkd3d-proton names the file after the exe; an older
+# cache left in the repository by earlier runs is moved over under that name)
+if [[ -f "$ROOT/vkd3d-proton.cache" && ! -f "$CACHE_DIR/vkd3d/vkd3d-proton.victory.exe.cache" ]]; then
+  mv "$ROOT/vkd3d-proton.cache" "$CACHE_DIR/vkd3d/vkd3d-proton.victory.exe.cache"
+fi
+rm -f "$ROOT/vkd3d-proton.cache.write"
+export VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-Z:${CACHE_DIR//\//\\}\\vkd3d}"
+export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-10G}"
 # GTA6-btw: skip the title's soft int3 asserts (diagnostic aid, not a fix).
 export VICTORY_SKIP_INT3="${VICTORY_SKIP_INT3:-1}"
 # Opt in to probing each new pipeline in a child process first

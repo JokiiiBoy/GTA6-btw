@@ -42,3 +42,7 @@ __pycache__/
 runtime/build/
 leonida-wine-logs/
 *.log
+
+# vkd3d-proton pipeline caches (kept in ~/.cache/victory/vkd3d by the run script)
+vkd3d-proton.cache
+vkd3d-proton.cache.write
