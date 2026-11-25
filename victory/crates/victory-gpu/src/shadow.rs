@@ -1698,6 +1698,7 @@ fn unmap_tiles(buffer: &ID3D12Resource, tiles: impl Iterator<Item = u32>) {
             NumTiles: 1,
             ..Default::default()
         };
+        let timed = std::time::Instant::now();
         // SAFETY: a live sparse buffer, a tile inside it.
         unsafe {
             host.queue().UpdateTileMappings(
@@ -1713,6 +1714,8 @@ fn unmap_tiles(buffer: &ID3D12Resource, tiles: impl Iterator<Item = u32>) {
                 D3D12_TILE_MAPPING_FLAG_NONE,
             );
         }
+        TILE_MAPS.fetch_add(1, Ordering::Relaxed);
+        TILE_MAP_US.fetch_add(timed.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
 }
 
@@ -1840,6 +1843,7 @@ fn map_tiles(buffer: &ID3D12Resource, tiles: &[(u32, Tile)]) {
             NumTiles: 1,
             ..Default::default()
         };
+        let timed = std::time::Instant::now();
         // SAFETY: a live sparse buffer and heap, tiles inside both.
         unsafe {
             host.queue().UpdateTileMappings(
@@ -1855,6 +1859,8 @@ fn map_tiles(buffer: &ID3D12Resource, tiles: &[(u32, Tile)]) {
                 D3D12_TILE_MAPPING_FLAG_NONE,
             );
         }
+        TILE_MAPS.fetch_add(1, Ordering::Relaxed);
+        TILE_MAP_US.fetch_add(timed.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
 }
 
@@ -2566,3 +2572,8 @@ fn mapped_view(address: u64) -> bool {
     let n = unsafe { VirtualQuery(address as *const _, &mut info, size_of::<MEMORY_BASIC_INFORMATION>()) };
     n != 0 && info.Type == MEM_MAPPED
 }
+
+/// `UpdateTileMappings` calls and the microseconds they took (logged with
+/// the frame rate).
+pub(crate) static TILE_MAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static TILE_MAP_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

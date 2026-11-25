@@ -1290,6 +1290,8 @@ impl Host {
             let started = std::time::Instant::now();
             // SAFETY: closed lists.
             unsafe { self.queue.ExecuteCommandLists(group) };
+            EXEC_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            EXECS.fetch_add(1, Ordering::Relaxed);
             if !each && i + 1 < groups.len() {
                 continue;
             }
@@ -1320,12 +1322,14 @@ impl Host {
                     .queue
                     .Signal(&self.fence, fence_val)
                     .and_then(|()| self.fence.SetEventOnCompletion(fence_val, self.event));
+                let waiting = std::time::Instant::now();
                 match waited {
                     Ok(()) => {
                         WaitForSingleObject(self.event, INFINITE);
                     }
                     Err(e) => tracing::warn!(error = %e, "host submission not waited for"),
                 }
+                WAIT_US.fetch_add(waiting.elapsed().as_micros() as u64, Ordering::Relaxed);
             }
             #[cfg(feature = "diagnostics")]
             if each {
@@ -3424,6 +3428,14 @@ impl Meter {
             #[cfg(feature = "diagnostics")]
             log_gpu_times();
             tracing::info!(
+                "submission costs per frame: {:.0} ExecuteCommandLists {:.1} ms, fence waits {:.1} ms, {:.0} UpdateTileMappings {:.1} ms",
+                EXECS.swap(0, Ordering::Relaxed) as f64 / frames,
+                EXEC_US.swap(0, Ordering::Relaxed) as f64 / 1e3 / frames,
+                WAIT_US.swap(0, Ordering::Relaxed) as f64 / 1e3 / frames,
+                crate::shadow::TILE_MAPS.swap(0, Ordering::Relaxed) as f64 / frames,
+                crate::shadow::TILE_MAP_US.swap(0, Ordering::Relaxed) as f64 / 1e3 / frames,
+            );
+            tracing::info!(
                 "[{} {}] {fps:.1} fps, {ms:.1} ms/frame ({cpu:.1} preparing: copies {copy_ms:.1} ms \
                  {copy_mb:.1} MB, textures {texture_ms:.1} ms {texture_mb:.1} MB, bindless plans \
                  {plans_ms:.1} ms; {gpu:.1} on the GPU; {back_ms:.1} copying back {back_mb:.1} MB; \
@@ -4250,3 +4262,9 @@ fn wait_if_removed(device: &ID3D12Device, error: &windows::core::Error) {
     });
     std::thread::sleep(std::time::Duration::from_secs(20));
 }
+
+/// Calls to `ExecuteCommandLists` for title lists, the microseconds spent in
+/// them and in waiting for their fence (logged with the frame rate).
+static EXECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static EXEC_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WAIT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
