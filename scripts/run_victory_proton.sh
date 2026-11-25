@@ -62,6 +62,13 @@ fi
 rm -f "$ROOT/vkd3d-proton.cache.write"
 export VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-Z:${CACHE_DIR//\//\\}\\vkd3d}"
 export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-10G}"
+# VIctory builds helper shaders with D3DCompile. Wine's d3dcompiler_47 fails on
+# the indirect-argument clamp, so every indirect draw and dispatch is dropped
+# (black world). Install Microsoft's in the prefix: winetricks d3dcompiler_47
+D3DC="$COMPAT_DATA/pfx/drive_c/windows/system32/d3dcompiler_47.dll"
+if [[ ! -f "$D3DC" ]] || grep -qa "Wine builtin DLL" "$D3DC"; then
+  echo "warning: no native d3dcompiler_47.dll in the prefix; the 3D world will stay black" >&2
+fi
 # GTA6-btw: skip the title's soft int3 asserts (diagnostic aid, not a fix).
 export VICTORY_SKIP_INT3="${VICTORY_SKIP_INT3:-1}"
 # Opt in to probing each new pipeline in a child process first

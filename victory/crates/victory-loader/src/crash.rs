@@ -482,10 +482,19 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         }
     }
     if FATAL.contains(&code) {
-        let to_file =
-            code == EXCEPTION_BREAKPOINT && LOG_FIRST_CHANCE_BREAKPOINTS.load(Ordering::Relaxed);
-        // SAFETY: as above.
-        unsafe { report("first-chance exception", info, to_file) };
+        // The write watch and guarded reads raise thousands of access
+        // violations (25,345 reports in one run). Reported only with
+        // `VICTORY_CRASH_FIRST_CHANCE=1`; unhandled exceptions are still
+        // reported (`report_unhandled`).
+        static FIRST_CHANCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let asked = *FIRST_CHANCE
+            .get_or_init(|| std::env::var_os("VICTORY_CRASH_FIRST_CHANCE").is_some());
+        let breakpoints = code == EXCEPTION_BREAKPOINT
+            && LOG_FIRST_CHANCE_BREAKPOINTS.load(Ordering::Relaxed);
+        if asked || breakpoints {
+            // SAFETY: as above.
+            unsafe { report("first-chance exception", info, breakpoints) };
+        }
     }
     EXCEPTION_CONTINUE_SEARCH
 }
