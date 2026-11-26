@@ -32,8 +32,6 @@ enum Mode {
     /// Movies that play once.
     NotLooping,
     All,
-    /// None skipped; how fast movies advance is logged (`VICTORY_BINK_RATE=1`).
-    Measure,
 }
 
 fn parse_mode(value: Option<&OsStr>) -> Mode {
@@ -114,10 +112,7 @@ static MOVIES: Mutex<Option<HashMap<usize, bool>>> = Mutex::new(None);
 pub fn wrap(dll: &str, name: &str, address: usize) -> usize {
     static FROM_ENV: OnceLock<Mode> = OnceLock::new();
     let mode = *FROM_ENV.get_or_init(|| {
-        let mut mode = parse_mode(std::env::var_os("VICTORY_SKIP_BINK").as_deref());
-        if mode == Mode::Off && std::env::var_os("VICTORY_BINK_RATE").is_some_and(|v| v == "1") {
-            mode = Mode::Measure;
-        }
+        let mode = parse_mode(std::env::var_os("VICTORY_SKIP_BINK").as_deref());
         if mode != Mode::Off {
             tracing::info!(?mode, "Bink movies are skipped");
         }
@@ -164,10 +159,6 @@ fn movies() -> std::sync::MutexGuard<'static, Option<HashMap<usize, bool>>> {
 /// is (kept) on its last frame.
 fn skipped(movie: *mut Movie) -> bool {
     if movie.is_null() {
-        return false;
-    }
-    if MODE.load(Ordering::Relaxed) == Mode::Measure as u8 {
-        measure(movie);
         return false;
     }
     let mut movies = movies();
@@ -363,43 +354,5 @@ mod tests {
         close(menu_ptr, 0, 0, 0);
         // A null handle (a failed open) goes to the DLL.
         assert_eq!(wait(std::ptr::null_mut(), 0, 0, 0), 7);
-    }
-}
-
-/// `VICTORY_BINK_RATE=1`: the frames movies advanced each second, against
-/// their own rate, logged every 5 s ("Bink movie rate"): a movie that falls
-/// behind its rate shows here while presents keep their pace.
-fn measure(movie: *mut Movie) {
-    use std::time::{Duration, Instant};
-    struct Rate {
-        since: Instant,
-        last: HashMap<usize, u32>,
-        advanced: u64,
-        nominal: f64,
-    }
-    static RATE: Mutex<Option<Rate>> = Mutex::new(None);
-    // SAFETY: the title passes the handle the DLL opened (see `skipped`).
-    let m = unsafe { &*movie };
-    let now = Instant::now();
-    let mut rate = RATE.lock().unwrap_or_else(|e| e.into_inner());
-    let r = rate.get_or_insert_with(|| Rate { since: now, last: HashMap::new(), advanced: 0, nominal: 0.0 });
-    let before = r.last.insert(movie as usize, m.frame_num);
-    if let Some(before) = before
-        && m.frame_num > before
-    {
-        r.advanced += u64::from(m.frame_num - before);
-    }
-    if m.frame_rate_div != 0 {
-        r.nominal = f64::from(m.frame_rate) / f64::from(m.frame_rate_div);
-    }
-    let elapsed = now - r.since;
-    if elapsed >= Duration::from_secs(5) {
-        tracing::info!(
-            advanced_per_s = format_args!("{:.1}", r.advanced as f64 / elapsed.as_secs_f64()),
-            own_rate = format_args!("{:.1}", r.nominal),
-            "Bink movie rate"
-        );
-        r.since = now;
-        r.advanced = 0;
     }
 }

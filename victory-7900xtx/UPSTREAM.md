@@ -75,3 +75,6 @@ Startup (run script, 2026-11-26): before the title starts, `victory warm --used`
 pipelines earlier runs used (from the pipeline book) while a zenity window says "Compiling
 shaders...", so the intro waits for none (seconds with warm caches; longer after a new build or
 driver). `VICTORY_WARM_FIRST=0` starts the title at once.
+
+"present times" (diagnostics, `host.rs`, added here): every 5 s, the median, 95th and 99th percentile and longest
+time between presents, and the share over 50 ms; a 5-second mean frame rate hides a stutter, these show it.

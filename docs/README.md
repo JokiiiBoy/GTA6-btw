@@ -10,6 +10,7 @@ method, scope and caveats. No game data is included.
 |---|---|
 | [design.md](design.md) | Overall project design, asset status, translator contract and open blockers. |
 | [linux_native_runtime.md](linux_native_runtime.md) | Audit and phased plan for a native Linux `gta6rt` runtime (PE loader, shims, Vulkan backend) without Wine/Proton. |
+| [linux-progress.md](linux-progress.md) | What was tried and measured under Wine/Proton tree by tree until 2026-11-26 (the README's former progress log). |
 | [related_projects.md](related_projects.md) | Prior art we may read and the licence boundaries on it. |
 | [rpf.md](rpf.md) | RPF9 archive layout, the carve tools and the unreadable encrypted TOC. |
 | [testing.md](testing.md) | Running the GPU tests on your own GPU: setup per OS, wave64 emulation, running without a GPU on Mesa llvmpipe, and known problems. |
