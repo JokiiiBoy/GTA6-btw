@@ -137,17 +137,27 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     if level() < if window { 1 } else { 2 } {
         return None;
     }
-    // View memory: known from the runtime without asking Windows.
-    if cover(start as usize, len as usize) != Cover::None {
-        STATS[4].fetch_add(1, Ordering::Relaxed);
-        return None;
-    }
+    // View memory: known from the runtime without asking Windows. One run of
+    // a committed section can be placed in the section's own heap
+    // (`VICTORY_INPLACE_VIEWS=1`); any other is copied.
+    let run = match cover(start as usize, len as usize) {
+        Cover::None => None,
+        Cover::Run(section, offset) if views_in_place() && committed(section) => Some((section, offset)),
+        _ => {
+            STATS[4].fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    };
     if STATS[1].load(Ordering::Relaxed) + STATS[3].load(Ordering::Relaxed) + len > most() {
         STATS[6].fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let host = crate::host::host()?;
-    match place_part(&host.device, start, len) {
+    let placed = match run {
+        Some((section, offset)) => place_in_section(&host.device, start, len, section, offset),
+        None => place_part(&host.device, start, len),
+    };
+    match placed {
         Ok(placed) => {
             let at = if window { 0 } else { 2 };
             STATS[at].fetch_add(1, Ordering::Relaxed);
@@ -166,6 +176,49 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
             None
         }
     }
+}
+
+/// `VICTORY_INPLACE_VIEWS=1` (with [`level`] 1 or 2): title memory that is
+/// one run of a view of a committed section is placed in a heap of the
+/// whole section instead of copied. Under Wine this needs a vkd3d-proton
+/// whose `OpenExistingHeapFromFileMapping` keeps its view mapped and a
+/// libdrm that imports memory backed by a file (proton-btw); the probe
+/// (`VICTORY_INPLACE_PROBE=1`) says whether this PC has both.
+fn views_in_place() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_INPLACE_VIEWS").is_some_and(|v| v == "1"))
+}
+
+/// Whether the runtime made `section` committed (only such a section opens).
+fn committed(section: usize) -> bool {
+    views().sections.iter().any(|s| s.0 == section && s.2)
+}
+
+/// Heaps of whole sections, by handle, opened when first asked for and kept
+/// until the section goes (buffers placed in one keep it alive after that).
+static SECTION_HEAPS: std::sync::Mutex<Vec<(usize, ID3D12Heap)>> = std::sync::Mutex::new(Vec::new());
+
+/// Title memory `[start, start + len)`, one run of `section` from `offset`
+/// on, as a buffer placed in the section's heap over the 64 KiB pages that
+/// hold it.
+fn place_in_section(device: &ID3D12Device, start: u64, len: u64, section: usize, offset: u64) -> Result<Placed, Option<windows::core::Error>> {
+    let heap = {
+        let mut heaps = SECTION_HEAPS.lock().unwrap_or_else(|e| e.into_inner());
+        match heaps.iter().find(|h| h.0 == section) {
+            Some(h) => h.1.clone(),
+            None => {
+                let heap = open(device, From::Section(section)).map_err(Some)?;
+                heaps.push((section, heap.clone()));
+                heap
+            }
+        }
+    };
+    let at = offset & !(K64 as u64 - 1);
+    let bytes = (offset + len.max(1)).next_multiple_of(K64 as u64) - at;
+    let buffer = place(device, &heap, at, bytes).map_err(Some)?;
+    // SAFETY: a live buffer.
+    let gpu = unsafe { buffer.GetGPUVirtualAddress() } + (offset - at);
+    Ok(Placed { buffer, heap, gpu, bias: offset - at })
 }
 
 /// What [`place_for`] gave (title memory `[start, start + bytes)`) is gone.
@@ -357,6 +410,7 @@ pub fn title_memory_section(section: usize, bytes: u64, committed: bool) {
 /// The runtime lets go of a section, and of its handle: no view the title
 /// sees is of it any more, and [`beside`]'s view goes.
 pub fn title_memory_section_gone(section: usize) {
+    SECTION_HEAPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|h| h.0 != section);
     let whole = {
         let mut v = views_mut();
         let at = v.whole.iter().position(|w| w.0 == section);
