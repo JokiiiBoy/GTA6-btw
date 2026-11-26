@@ -369,6 +369,39 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
         // SAFETY: the title's out pointer (a local of its own).
         unsafe { *out = std::ptr::null() };
     }
+    // `VICTORY_PIPELINE_DUMP=<dir>`: the first 64 descriptions of each slot
+    // and what each of their words points at (that word's next word bytes
+    // when it looks like a size, else 512), to work out the layout. Title
+    // data: keep the folder out of the repository.
+    #[cfg(windows)]
+    if calls <= 64 {
+        if let Some(dir) = std::env::var_os("VICTORY_PIPELINE_DUMP") {
+            let dir = std::path::PathBuf::from(dir);
+            let _ = std::fs::create_dir_all(&dir);
+            let stem = format!("{SLOT:03x}-{calls:03}");
+            let mut head = [0u8; 128];
+            if !desc.is_null() && crate::host::read_into(desc, &mut head) {
+                let _ = std::fs::write(dir.join(format!("{stem}.desc")), head);
+                let w: Vec<u64> = head
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| u64::from_le_bytes(*c))
+                    .collect();
+                for i in 0..w.len() {
+                    if w[i] < 0x10000 {
+                        continue;
+                    }
+                    let next = w.get(i + 1).copied().unwrap_or(0);
+                    let len = if (1..=0x10_0000).contains(&next) { next as usize } else { 512 };
+                    let mut bytes = vec![0u8; len];
+                    if crate::host::read_into(w[i] as *const u8, &mut bytes) {
+                        let _ = std::fs::write(dir.join(format!("{stem}.w{i:02}")), &bytes);
+                    }
+                }
+            }
+        }
+    }
     if calls <= 4 || calls.is_power_of_two() {
         // Sixteen 64-bit words at `at`, read through the kernel: neither
         // pointer is known to be mapped.

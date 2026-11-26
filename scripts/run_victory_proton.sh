@@ -5,6 +5,8 @@ set -euo pipefail
 # overridden from the environment.
 #   VICTORY_TREE=victory-dexnom (default): DexNom Runtime + GTA6-btw's Wine fixes
 #   VICTORY_TREE=victory: Belobug's AMD fork + GTA6-btw's Wine fixes
+#   VICTORY_TREE=victory-7900xtx: avatarmanz's RDNA 3 speed fork + GTA6-btw's
+#     Wine fixes (victory-7900xtx/UPSTREAM.md), with that fork's settings
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GTA6_DIR="${GTA6_DIR:-/home/joki/Downloads/GTA6.Xbox.v1.0.2.1}"
@@ -69,6 +71,36 @@ D3DC="$COMPAT_DATA/pfx/drive_c/windows/system32/d3dcompiler_47.dll"
 if [[ ! -f "$D3DC" ]] || grep -qa "Wine builtin DLL" "$D3DC"; then
   echo "warning: no native d3dcompiler_47.dll in the prefix; the 3D world will stay black" >&2
 fi
+# VIctory-7900XTX's own settings (its scripts/play.ps1, without -Safe). Its
+# VICTORY_SKIP_PIPELINES=none needs RUST_MIN_STACK (below): without it the three
+# compute pipelines victory-dexnom skips never finish and the intro stutters
+# waiting for them; with it they are made (tested 2026-11-26). VICTORY_BVH_BUILDER=1 is its -RayTracing (lit interiors,
+# about a third slower). VICTORY_AMBIENT: 0 is the title's own ambient light (as
+# victory-dexnom); the fork plays with 0.8, its estimate from the frame, which
+# looked worse here.
+# Added from zeex64's Linux settings (linux/local.env.example, measured on an RX 9070 XT under
+# RADV): the pipeline book (every pipeline the title creates is written down, for `warm`),
+# copies of 1 MiB and more in the card's memory (80 -> 60 ms a frame there), and two
+# switches it measured as slower left off. Not its VICTORY_SKIP_BINK=1, which skips the
+# logo and intro movies.
+# VICTORY_FORK_SETTINGS=0: none of them (the settings victory-dexnom runs with).
+if [[ "$VICTORY_TREE" == "victory-7900xtx" && "${VICTORY_FORK_SETTINGS:-1}" != "0" ]]; then
+  for kv in VICTORY_TEXTURE_NO_WAIT=1 VICTORY_RELAY=2 VICTORY_WIDE_BACK=1 VICTORY_CARD_REHASH_RUNS=1 \
+            VICTORY_JOIN_COPIES=1 VICTORY_INDIRECT_WINDOW=1 VICTORY_RELAY_COPY=1 VICTORY_CARD_STEPS=2 \
+            VICTORY_INDIRECT_BATCH=2 VICTORY_MAP_THREADS=1 VICTORY_TITLE_PRIORITIES=0 VICTORY_CARD_AWAKE=1 \
+            VICTORY_SHOW_AFTER=1 VICTORY_AMBIENT=0 VICTORY_D3D12_DRED=light VICTORY_SKIP_PIPELINES=none \
+            VICTORY_THIN=1 VICTORY_JOIN_PARTS=8 VICTORY_UPLOAD_AHEAD=1 \
+            VICTORY_PIPELINE_BOOK=1 VICTORY_CARD_BUFFERS_MIN_MB=1 VICTORY_GAPS_TOGETHER=0 \
+            VICTORY_POOLS_MORE=0; do
+    name="${kv%%=*}"
+    if [[ -z "${!name+x}" ]]; then export "$kv"; fi
+  done
+fi
+# Under vkd3d-proton a pipeline's DXIL becomes SPIR-V on the stack of the thread that asks
+# for it, and the largest compute programs overflow Rust's default 2 MB thread stack; under
+# Wine the thread dies silently and the pipeline stays "being made" for good (zeex64,
+# linux/run.sh). The stack of every thread VIctory starts itself:
+export RUST_MIN_STACK="${RUST_MIN_STACK:-67108864}"
 # How long a frame waits for pipelines still being compiled before it draws
 # without them. DexNom's default is 12 s per frame ("the picture before frame
 # rate"); under vkd3d-proton/RADV three compute pipelines never finish, so
@@ -101,4 +133,29 @@ echo "tree:        $VICTORY_TREE"
 echo "victory.exe: $VICTORY_EXE"
 echo "console:     $VICTORY_CONSOLE"
 echo "trace log:   $TRACE_LOG"
+# `run_victory_proton.sh warm [args]`: pipelines made ahead of a run (`victory warm`,
+# default `--used`: those earlier runs drew with, from the pipeline book).
+if [[ "${1:-}" == "warm" ]]; then
+  shift
+  [[ $# -gt 0 ]] || set -- --used
+  exec "$PROTON" run "$VICTORY_EXE" warm "$@"
+fi
+# Before the title starts: the pipelines earlier runs used are made ahead
+# (`victory warm --used`) while a "Compiling shaders" window is shown, so the
+# intro does not wait for them. On by default for victory-7900xtx (its
+# pipeline book lists them); VICTORY_WARM_FIRST=0 starts the title at once.
+if [[ "${VICTORY_WARM_FIRST:-$([[ "$VICTORY_TREE" == "victory-7900xtx" ]] && echo 1 || echo 0)}" == "1" ]]; then
+  echo "compiling shaders before the title starts..."
+  "$PROTON" run "$VICTORY_EXE" warm --used > /dev/null 2>&1 &
+  WARM=$!
+  if command -v zenity > /dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    ( while kill -0 "$WARM" 2> /dev/null; do echo "#Compiling shaders... ${SECONDS}s"; sleep 1; done; echo 100 ) |
+      zenity --progress --pulsate --auto-close --no-cancel --title="GTA6-btw" \
+        --text="Compiling shaders..." --width=320 2> /dev/null &
+    DIALOG=$!
+  fi
+  wait "$WARM" || echo "warning: compiling shaders ahead failed; the title starts anyway" >&2
+  [[ -n "${DIALOG:-}" ]] && wait "$DIALOG" 2> /dev/null
+  echo "shaders ready"
+fi
 exec "$PROTON" run "$VICTORY_EXE" run --execute --console "$VICTORY_CONSOLE" "$GAME_EXE" "$@"
