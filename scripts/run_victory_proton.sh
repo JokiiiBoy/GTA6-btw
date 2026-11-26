@@ -42,7 +42,14 @@ STEAM_CLIENT="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
 TARGET_DIR="$ROOT/$VICTORY_TREE/target/x86_64-pc-windows-msvc"
 VICTORY_EXE="${VICTORY_EXE:-}"
 if [[ -z "$VICTORY_EXE" ]]; then
-  for candidate in "$TARGET_DIR"/{diag,release,debug}/victory.exe; do
+  # The release build first (about a third faster here); VICTORY_BUILD=diag picks the
+  # diagnostics one (counters, the test switches in README.md).
+  case "${VICTORY_BUILD:-release}" in
+    diag) order=(diag release debug) ;;
+    *) order=(release diag debug) ;;
+  esac
+  for build in "${order[@]}"; do
+    candidate="$TARGET_DIR/$build/victory.exe"
     if [[ -f "$candidate" ]]; then VICTORY_EXE="$candidate"; break; fi
   done
 fi
@@ -92,8 +99,13 @@ defaults VICTORY_LOG=info "VICTORY_LOG_FILE=Z:\\tmp\\opencode\\victory-trace.log
          VICTORY_SKIP_INT3=1 \
          VICTORY_HAIR=1 \
          VICTORY_PIPELINE_WAIT_MS=100
-# Series X (default) or series-s: 1080p, less video memory, about 5 ms faster, a softer picture.
-VICTORY_CONSOLE="${VICTORY_CONSOLE:-series-x}"
+# Series S (default): 1080p, fewer bytes copied and less video memory than series-x, which a
+# 12 GB card and 32 GB of RAM need; a softer picture. Its start screen can stay black until a
+# key is pressed.
+VICTORY_CONSOLE="${VICTORY_CONSOLE:-series-s}"
+# The logo and intro movies are skipped (VICTORY_SKIP_BINK=0 plays them; `all` also skips the
+# looping ones, which leaves menu backgrounds dark).
+defaults VICTORY_SKIP_BINK=1
 
 # The newer trees: their forks' launcher settings (scripts/play.ps1, without -Safe) plus zeex64's
 # Linux measurements (linux/local.env.example). VICTORY_FORK_SETTINGS=0 leaves all of them out.

@@ -8,13 +8,13 @@ from [Leonida](https://github.com/ItsNotRexed/Leonida), whose own runtime is sti
 
 ## Where it stands (2026-11-26)
 
-Tested on one machine: Ryzen 7 7700, 32 GB RAM, Radeon RX 7700 XT 12 GB, CachyOS, Mesa RADV, the Series X profile.
+Tested on one machine: Ryzen 7 7700, 32 GB RAM, Radeon RX 7700 XT 12 GB, CachyOS, Mesa RADV.
 
 | | |
 |---|---|
 | Boot, menus, intro video | 30 fps, the title's own cap |
 | From the start to the world | about 30-50 s once the caches are warm |
-| Open world, first mission | 6-10 fps (`victory-7900xtx`; `victory-dexnom` ran 1-4) |
+| Open world, first mission | 9-11 fps with the release build, Series X profile (diagnostics build 6-10; `victory-dexnom` 1-4) |
 | Shaders | every shader the title used translates |
 
 Known to be wrong:
@@ -23,7 +23,10 @@ Known to be wrong:
   running. Never worked in any tree here.
 - **Some scenes are too dark, and the phone's screen stays blank**: both need the console's ray-tracing structures,
   which are off (`VICTORY_BVH_BUILDER=1` turns them on, at about half the frame rate).
-- **The first intro scene can stutter** on some settings while the title's movie competes for the CPU.
+- **Frames go to copying memory**: about 40 ms a frame copying title memory to the card and 50 ms copying back,
+  because under Wine the card cannot use the title's memory where it is. 32 GB of RAM is tight (the title wants
+  about 30 GB): close the browser and the like while playing.
+- **Audio is choppy** at these frame rates: the title's audio engine runs with the game.
 - **Textures appear late** while the title streams; 12 GB of video memory fills up.
 
 ## Quick start
@@ -34,14 +37,16 @@ You need: Docker (for the Proton build), Rust with the `x86_64-pc-windows-msvc` 
 
 ### 1. Proton
 
-Proton is built from `../Proton` (Valve's Proton with changes to Wine's server and ntdll: memory views found through a
-tree instead of a list, which makes the title's 1,000-14,000 mappings a second cheap: loading is much faster) into
-`../proton-btw`, and installed as the compat tool `victory-ntdll`:
+The Proton for this is [proton-btw](https://github.com/JokiiiBoy/proton-btw): Valve's Proton 11 with changes to Wine's
+server and ntdll (memory views found through a tree instead of a list, which makes the title's 1,000-14,000 mappings a
+second cheap: loading is much faster) and vkd3d-proton master. Its `build.sh` fetches Valve's Proton, applies the
+patches and builds it in Valve's container (Docker); see its README.
 
 ```bash
+git clone https://github.com/JokiiiBoy/proton-btw ../proton-btw
 cd ../proton-btw
-make -j16            # in Valve's Steam Runtime container; -march=znver4 -mno-avx is set in its Makefile
-make install         # -> ~/.local/share/Steam/compatibilitytools.d/victory-ntdll
+echo 'X86_64_MARCH="-march=znver4 -mno-avx"' > build.env   # optional: Zen 4 here; see its README
+./build.sh install                                          # -> compat tool victory-ntdll
 ```
 
 The run script uses `victory-ntdll` when it is installed, else `Proton-CachyOS-Victory`; `PROTON=<tool>/proton`
@@ -60,8 +65,12 @@ WINEPREFIX=~/.local/share/victory-proton/pfx winetricks d3dcompiler_47
 
 ```bash
 cd victory-7900xtx
-cargo build --profile diag -p victory --features diagnostics --bins --target x86_64-pc-windows-msvc
+cargo build --release -p victory --bins --target x86_64-pc-windows-msvc
 ```
+
+The release build is about a third faster than the diagnostics one (`--profile diag --features diagnostics`, with the
+counters and test switches below; the run script takes it with `VICTORY_BUILD=diag`). Each keeps its own translated
+shaders, so the first run of either translates them all.
 
 ### 4. Play
 
@@ -99,7 +108,9 @@ variable set in the environment wins.
 | `VICTORY_TREE` | `victory-7900xtx` | which tree runs |
 | `GTA6_DIR`, `GAME_EXE` | `~/Downloads/GTA6.Xbox.v1.0.2.1` | the game |
 | `PROTON` | `victory-ntdll` | the compat tool |
-| `VICTORY_CONSOLE` | `series-x` | `series-s`: 1080p, less video memory, about 5 ms faster, a softer picture |
+| `VICTORY_CONSOLE` | `series-s` | 1080p: fewer bytes copied, less video memory, a softer picture; `series-x` for the full picture. The start screen can stay black until a key is pressed |
+| `VICTORY_SKIP_BINK` | `1` | the logo and intro movies are skipped; `0` plays them |
+| `VICTORY_BUILD` | `release` | `diag`: the diagnostics build |
 | `VICTORY_WARM_FIRST` | `1` | `0`: start the title without compiling shaders first |
 | `VICTORY_FORK_SETTINGS` | `1` | `0`: none of the tree's speed switches (to tell whether one of them is at fault) |
 | `VICTORY_AMBIENT` | `0` | the title's own ambient light; `0.8`: the forks' stand-in for the missing ray-traced light (flatter skin) |
