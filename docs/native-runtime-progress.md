@@ -30,6 +30,21 @@ need the same: the title's memory shared between its views and the card.
 
 ## Log
 
+### 2026-11-26 (late): no freeze any more; placed views alone make the frame slower
+
+- The freeze was `place_in_section` opening the whole page-pool section as one heap the first time, under
+  `shadow`'s `LOOSE` write lock: importing it touches every page of the section (gigabytes, swapping with 32 GB) while
+  every list thread waits for the lock (stack dump at 60 s: `victory-list-*` in `RwLock::read_contended` in
+  `shadow::loose`). Now each window imports only its own 64 KiB pages, from VIctory's own unguarded view of the whole
+  section (`beside`), with `OpenExistingHeapFromAddress1`.
+- In game (diagnostics build, Series X, 300 s): the world loads and runs, 80 windows (376 MB) in place, about 1,850
+  turned down (not one run of a section), **4.2 fps with 1.7 GB of copies a frame** (without in place: ~9 fps release /
+  6-7 diagnostics, ~0.1 GB). The same as `VICTORY_INPLACE=1` alone: memory in place must not have its write watch reset
+  (under Wine that write-protects the pages and the driver waits and pins again, `inplace::pinned`), and every other
+  copy that shares a 64 KiB block with it then loses its write tracking and is copied whole each frame.
+- So in place pays only when almost all of the title's GPU memory is in place, or when the copies beside it are
+  tracked without resets.
+
 ### 2026-11-26 (night): the card reads and writes the title's views in place; the game then freezes while loading
 
 - With proton-btw's vkd3d-proton patch and the private libdrm (`LD_LIBRARY_PATH=~/.local/lib/victory-libdrm/lib`),
@@ -70,14 +85,13 @@ need the same: the title's memory shared between its views and the card.
 
 ## Next
 
-Step 1, continued, in `victory-7900xtx`:
+Step 1, continued, in `victory-7900xtx` (run switches as in the log: `LD_LIBRARY_PATH=~/.local/lib/victory-libdrm/lib
+VICTORY_INPLACE=1 VICTORY_INPLACE_VIEWS=1 VICTORY_SKIP_INTRO=40 VICTORY_BUILD=diag VICTORY_CONSOLE=series-x`):
 
-1. Find what the frozen threads wait for: a run with `VICTORY_STACKS` (stack dumps into the log) at the freeze, the
-   same switches as above (`LD_LIBRARY_PATH` to the private libdrm, `VICTORY_INPLACE=1 VICTORY_INPLACE_VIEWS=1
-   VICTORY_SKIP_INTRO=40 VICTORY_BUILD=diag VICTORY_CONSOLE=series-x`).
-2. Keep view pages that are in place out of the guards and the write-watch resets, as private memory is
-   (`inplace::pinned`, `watch.rs` where it protects and resets).
-3. Then measure copies and fps against 9.3 fps / ~90 ms of copies (release build, Series X), and put the working
-   switches and `LD_LIBRARY_PATH` into the run script.
-4. Scattered windows (189-218 not one run): a reserved (tiled) buffer whose 64 KiB tiles are mapped to the section's
-   pages (`UpdateTileMappings`) would place those too.
+1. Find which copies become "copied whole" with in place on (copystat's per-range lines: `copied from ... MB/frame`),
+   and whether they share 64 KiB blocks with placed memory.
+2. Track those copies without write-watch resets: compare their bytes (the card-side hashes `VICTORY_CARD_*` already do
+   that for copies in the card's memory) or a no-reset kernel query, so a pinned neighbour does not force whole copies.
+3. Place the scattered windows too: a reserved (tiled) buffer whose 64 KiB tiles are mapped to the section's pages
+   (`UpdateTileMappings`), so that nearly all title GPU memory is in place.
+4. Measure against ~9 fps / ~0.1 GB copies (release, Series X); only then put the switches into the run script.

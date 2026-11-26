@@ -154,7 +154,7 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     }
     let host = crate::host::host()?;
     let placed = match run {
-        Some((section, offset)) => place_in_section(&host.device, start, len, section, offset),
+        Some(_) => place_in_section(&host.device, start, len),
         None => place_part(&host.device, start, len),
     };
     match placed {
@@ -194,31 +194,22 @@ fn committed(section: usize) -> bool {
     views().sections.iter().any(|s| s.0 == section && s.2)
 }
 
-/// Heaps of whole sections, by handle, opened when first asked for and kept
-/// until the section goes (buffers placed in one keep it alive after that).
-static SECTION_HEAPS: std::sync::Mutex<Vec<(usize, ID3D12Heap)>> = std::sync::Mutex::new(Vec::new());
-
-/// Title memory `[start, start + len)`, one run of `section` from `offset`
-/// on, as a buffer placed in the section's heap over the 64 KiB pages that
-/// hold it.
-fn place_in_section(device: &ID3D12Device, start: u64, len: u64, section: usize, offset: u64) -> Result<Placed, Option<windows::core::Error>> {
-    let heap = {
-        let mut heaps = SECTION_HEAPS.lock().unwrap_or_else(|e| e.into_inner());
-        match heaps.iter().find(|h| h.0 == section) {
-            Some(h) => h.1.clone(),
-            None => {
-                let heap = open(device, From::Section(section)).map_err(Some)?;
-                heaps.push((section, heap.clone()));
-                heap
-            }
-        }
+/// Title memory `[start, start + len)`, one run of a section, as a buffer
+/// placed in a heap opened on the same pages of our own view of the whole
+/// section ([`beside`]: never guarded nor changed), over only the 64 KiB
+/// pages that hold it. (Opening the whole section instead imports every
+/// page of it at once: gigabytes, the loading stood still.)
+fn place_in_section(device: &ID3D12Device, start: u64, len: u64) -> Result<Placed, Option<windows::core::Error>> {
+    let Some(base) = beside(start as usize, len as usize) else {
+        return Err(None);
     };
-    let at = offset & !(K64 as u64 - 1);
-    let bytes = (offset + len.max(1)).next_multiple_of(K64 as u64) - at;
-    let buffer = place(device, &heap, at, bytes).map_err(Some)?;
+    let at = base & !(K64 - 1);
+    let bytes = (base + len.max(1) as usize).next_multiple_of(K64) - at;
+    let heap = open(device, From::Part(at, bytes)).map_err(Some)?;
+    let buffer = place(device, &heap, 0, bytes as u64).map_err(Some)?;
     // SAFETY: a live buffer.
-    let gpu = unsafe { buffer.GetGPUVirtualAddress() } + (offset - at);
-    Ok(Placed { buffer, heap, gpu, bias: offset - at })
+    let gpu = unsafe { buffer.GetGPUVirtualAddress() } + (base - at) as u64;
+    Ok(Placed { buffer, heap, gpu, bias: (base - at) as u64 })
 }
 
 /// What [`place_for`] gave (title memory `[start, start + bytes)`) is gone.
@@ -410,7 +401,6 @@ pub fn title_memory_section(section: usize, bytes: u64, committed: bool) {
 /// The runtime lets go of a section, and of its handle: no view the title
 /// sees is of it any more, and [`beside`]'s view goes.
 pub fn title_memory_section_gone(section: usize) {
-    SECTION_HEAPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|h| h.0 != section);
     let whole = {
         let mut v = views_mut();
         let at = v.whole.iter().position(|w| w.0 == section);
